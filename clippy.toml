@@ -1,0 +1,5 @@
+# `Ty` carries an optional span, so the error enums that hold two of them
+# (`RuntimeError::TypeError`, `TyError::Mismatch`) pass clippy's default
+# 128-byte `result_large_err` threshold. Errors are rare; a boxed type in
+# every student-facing pattern is not worth the bytes.
+large-error-threshold = 512

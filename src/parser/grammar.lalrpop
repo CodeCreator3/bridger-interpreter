@@ -1,0 +1,331 @@
+// The Bridger grammar  [frozen — do not edit]
+//
+// Appendix B, as an LALRPOP grammar over the tokens `lexer.rs` produces. The
+// expression cascade is written once as a macro over two parameters: `L`, the
+// primary allowed in the LEFTMOST position, and `R`, the primary allowed
+// elsewhere. Three instantiations cover the places where the grammar restricts
+// what an expression may start with or contain:
+//
+//   Expr    = ExprG<P,   P>    anywhere an expression is expected
+//   ExprNB  = ExprG<PNB, P>    a block item: may not START with a braced form
+//                              (those are statements; see `Item`)
+//   ExprNS  = ExprG<PNS, PNS>  the head of `if`/`while`/`for`/`match`: no
+//                              struct literal, whose `{` would read as the block
+
+use crate::ast::*;
+use super::ParseError;
+use super::Token;
+use super::build::*;
+use std::rc::Rc;
+
+grammar(src: SrcId);
+
+extern {
+    type Location = usize;
+    type Error = ParseError;
+
+    enum Token {
+        "ident"      => Token::Ident(<String>),
+        "UpperIdent" => Token::UpperIdent(<String>),
+        "int"        => Token::Int(<i64>),
+        "str"        => Token::Str(<String>),
+        "fn" => Token::Fn, "let" => Token::Let, "if" => Token::If, "else" => Token::Else,
+        "while" => Token::While, "match" => Token::Match, "type" => Token::Type,
+        "struct" => Token::Struct, "trait" => Token::Trait, "impl" => Token::Impl,
+        "for" => Token::For, "in" => Token::In, "relation" => Token::Relation,
+        "rule" => Token::Rule, "add" => Token::Add, "clear" => Token::Clear,
+        "solutions" => Token::Solutions, "not" => Token::Not, "and" => Token::And,
+        "or" => Token::Or, "true" => Token::True, "false" => Token::False,
+        "ref" => Token::Ref, "deref" => Token::Deref, "self" => Token::SelfValue,
+        "Self" => Token::SelfType, "return" => Token::Return, "mut" => Token::Mut,
+        "(" => Token::LParen, ")" => Token::RParen, "[" => Token::LBracket,
+        "]" => Token::RBracket, "{" => Token::LBrace, "}" => Token::RBrace,
+        "," => Token::Comma, ";" => Token::Semi, ":" => Token::Colon,
+        "::" => Token::ColonColon, ":-" => Token::ColonDash, "." => Token::Dot,
+        "..." => Token::DotDotDot, "=>" => Token::FatArrow, "->" => Token::Arrow,
+        "=" => Token::Eq, "==" => Token::EqEq, "!=" => Token::Ne, "<" => Token::Lt,
+        "<=" => Token::Le, ">" => Token::Gt, ">=" => Token::Ge, "+" => Token::Plus,
+        "++" => Token::PlusPlus, "-" => Token::Minus, "*" => Token::Star,
+        "/" => Token::Slash, "%" => Token::Percent, ":=" => Token::Assign,
+        "|" => Token::Pipe, "?" => Token::Question, "_" => Token::Underscore,
+    }
+}
+
+// An empty optional at the END of a production makes LALRPOP's `@R` the start
+// of the next token (whitespace included), so such productions capture `@R`
+// before the optional too and pick the right one: `end(opt.is_some(), before, after)`.
+
+// ---- separated lists -------------------------------------------------------
+
+Sep1<T>: Vec<T> = {
+    <t:T> => vec![t],
+    <mut v:Sep1<T>> "," <t:T> => { v.push(t); v },
+};
+Sep<T>: Vec<T> = {
+    => Vec::new(),
+    Sep1<T>,
+};
+SepTrail<T>: Vec<T> = {
+    => Vec::new(),
+    <v:Sep1<T>> ","? => v,
+};
+
+// ---- programs and definitions ---------------------------------------------
+
+pub Program: Program = <defs:Def*> =>? program(defs).map_err(user);
+
+Def: DefItem = {
+    <l:@L> "fn" <nl:@L> <name:Name> <nr:@R> <g:Generics> "(" <ps:Sep<Param>> ")" <ret:("->" <Type>)?> <body:FnBody> <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Fn(g, ps, ret.unwrap_or_else(Ty::unit), bx(body))),
+    <l:@L> "type" <nl:@L> <name:"UpperIdent"> <nr:@R> <g:Generics> "=" "|"? <vs:Variants> ";" <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Type(g, vs)),
+    <l:@L> "struct" <nl:@L> <name:"UpperIdent"> <nr:@R> <g:Generics> "{" <fs:SepTrail<FieldDecl>> "}" <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Struct(g, fs)),
+    <l:@L> "trait" <nl:@L> <name:"UpperIdent"> <nr:@R> <g:Generics> "{" <sigs:(<FnSig> ";")*> "}" <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Trait(g, sigs)),
+    <l:@L> "impl" <g:Generics> <head:Type> <for_ty:("for" <Type>)?> <hr:@R> "{" <ms:Method*> "}" <r:@R>
+        =>? impl_def(g, head, for_ty, ms, sp(src, l, r), sp(src, l, hr)).map_err(user),
+    <l:@L> "relation" <nl:@L> <name:Name> <nr:@R> ":" "(" <tys:Sep1<Type>> ")" ";" <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Relation(tys)),
+    <l:@L> "rule" <head:RuleAtom> <body:(":-" <Expr>)?> ";" <r:@R>
+        =>? rule_def(head, body, sp(src, l, r)).map(DefItem::Rule).map_err(user),
+    <l:@L> "let" <nl:@L> <name:Name> <nr:@R> <ty:(":" <Type>)?> "=" <e:Expr> ";" <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Global(ty, bx(e))),
+    <l:@L> "ref" <nl:@L> <name:Name> <nr:@R> <ty:(":" <Type>)?> "=" <e:Expr> ";" <r:@R>
+        => DefItem::Decl(name, sp(src, nl, nr), sp(src, l, r), Decl::Global(ty.map(ref_ty), bx(ref_of(e, sp(src, l, r))))),
+};
+
+FnBody: Expr = {
+    "=" <Expr> ";",
+    Block,
+};
+
+Generics: Generics = {
+    => Generics { params: Vec::new() },
+    "<" <params:Sep1<TParam>> ">" => Generics { params },
+};
+TParam: TyParam = <l:@L> <name:"UpperIdent"> <bound:(":" <TraitRef>)?> <r:@R> => TyParam { name, bound, span: sp(src, l, r) };
+TraitRef: TraitRef = <l:@L> <name:"UpperIdent"> <args:TypeArgs> <r:@R> => TraitRef { name, args, span: sp(src, l, r) };
+TypeArgs: Vec<Ty> = {
+    => Vec::new(),
+    "<" <Sep1<Type>> ">",
+};
+
+Param: Param = <l:@L> <name:Name> ":" <ty:Type> <r:@R> => Param { name, ty, span: sp(src, l, r) };
+FieldDecl: Field = <l:@L> <name:Name> ":" <ty:Type> <r:@R> => Field { name, ty, span: sp(src, l, r) };
+
+Variants: Vec<Variant> = {
+    <v:Variant> => vec![v],
+    <mut vs:Variants> "|" <v:Variant> => { vs.push(v); vs },
+};
+Variant: Variant = <l:@L> <name:"UpperIdent"> <nr:@R> <fields:("(" <Sep1<Type>> ")")?> <r:@R>
+    => Variant { name, span: sp(src, l, end(fields.is_some(), nr, r)), fields: fields.unwrap_or_default() };
+
+// `(…)` of a method signature: `self`, `self, x: T, …`, `x: T, …`, or nothing.
+SigParams: (bool, Vec<Param>) = {
+    => (false, Vec::new()),
+    "self" => (true, Vec::new()),
+    "self" "," <ps:Sep1<Param>> => (true, ps),
+    <ps:Sep1<Param>> => (false, ps),
+};
+FnSig: Sig = <l:@L> "fn" <name:Name> "(" <sp_:SigParams> ")" <pr:@R> <ret:("->" <Type>)?> <r:@R>
+    => Sig { name, has_self: sp_.0, params: sp_.1, span: sp(src, l, end(ret.is_some(), pr, r)), ret: ret.unwrap_or_else(Ty::unit) };
+Method: Method = <l:@L> "fn" <name:Name> "(" <sp_:SigParams> ")" <pr:@R> <ret:("->" <Type>)?> <sr:@R> <body:FnBody> <r:@R>
+    => Method { name, has_self: sp_.0, params: sp_.1, sig: sp(src, l, end(ret.is_some(), pr, sr)), ret: ret.unwrap_or_else(Ty::unit), body, span: sp(src, l, r) };
+
+Type: Ty = {
+    <l:@L> "(" ")" <r:@R> => Ty::at(TyKind::Unit, sp(src, l, r)),
+    <l:@L> "Self" <r:@R> => Ty::at(TyKind::SelfTy, sp(src, l, r)),
+    <l:@L> "(" <t:Type> "," <mut ts:Sep1<Type>> ")" <r:@R> => { ts.insert(0, t); Ty::at(TyKind::Tuple(Rc::from(ts)), sp(src, l, r)) },
+    <l:@L> "[" <t:Type> "]" <r:@R> => Ty::at(TyKind::List(Rc::new(t)), sp(src, l, r)),
+    <l:@L> "fn" "(" <ps:Sep<Type>> ")" "->" <ret:Type> <r:@R> => Ty::at(TyKind::Fn(Rc::from(ps), Rc::new(ret)), sp(src, l, r)),
+    <l:@L> "ref" "<" <t:Type> ">" <r:@R> => Ty::at(TyKind::Ref(Rc::new(t)), sp(src, l, r)),
+    <l:@L> <name:"UpperIdent"> <nr:@R> <args:TypeArgs> <r:@R> =>? named_ty(name, sp(src, l, end(!args.is_empty(), nr, r)), args).map_err(user),
+};
+
+// ---- relations --------------------------------------------------------------
+
+// A name: an identifier, or one of `add` / `clear` / `solutions`, which are
+// keywords only where a relation atom (or, for `clear`, a relation name)
+// follows them — everywhere else they are ordinary names, so `set.add(x)`,
+// `fn clear(…)`, and a variable `solutions` are all fine.
+#[inline]
+Name: Name = {
+    "ident",
+    "add" => "add".to_string(),
+    "clear" => "clear".to_string(),
+    "solutions" => "solutions".to_string(),
+};
+
+RuleAtom: Atom = <l:@L> <name:Name> "(" <terms:Sep1<Term>> ")" <r:@R> => Atom { name, terms, span: sp(src, l, r) };
+Term: Term = {
+    <x:Name> => Term::Var(x),
+    <l:Literal> => Term::Lit(l),
+};
+Query: Query = <name:Name> "(" <args:Sep1<QArg>> ")" => Query { name, args };
+QArg: QArg = {
+    <e:Expr> => QArg::Expr(e),
+    "?" => QArg::Hole(None),
+    "?" <x:Name> => QArg::Hole(Some(x)),
+};
+
+// ---- blocks ----------------------------------------------------------------
+
+Block: Expr = <l:@L> "{" <items:Item*> <tail:ExprNB?> "}" <r:@R> => block(items, tail, sp(src, l, r));
+
+Item: Item = {
+    <s:LetBinding> => Item::Stmt(s),
+    <s:RefBinding> => Item::Stmt(s),
+    <e:ExprNB> ";" => Item::Stmt(Stmt::Expr(e)),
+    <e:Braced> ";" => Item::Stmt(Stmt::Expr(e)),
+    <e:Braced> => Item::Braced(e),
+};
+LetBinding: Stmt = <l:@L> "let" <x:Name> <ty:(":" <Type>)?> "=" <e:Expr> ";" <r:@R>
+    => Stmt::Let(x, ty, e, sp(src, l, r));
+RefBinding: Stmt = <l:@L> "ref" <x:Name> <ty:(":" <Type>)?> "=" <e:Expr> ";" <r:@R>
+    => Stmt::Let(x, ty.map(ref_ty), ref_of(e, sp(src, l, r)), sp(src, l, r));
+
+// ---- expressions -----------------------------------------------------------
+
+pub Expr: Expr = ExprG<P, P>;
+ExprNB: Expr = ExprG<PNB, P>;
+ExprNS: Expr = ExprG<PNS, PNS>;
+
+ExprG<L, R>: Expr = {
+    <l:@L> "|" <ps:Sep<LParam>> "|" <body:ExprG<R, R>> <r:@R> =>? lambda(ps, body, sp(src, l, r)).map_err(user),
+    <l:@L> "return" <e:ExprG<R, R>> <r:@R> => Expr::Return(bx(e), sp(src, l, r)),
+    Assign<L, R>,
+};
+LParam: LambdaParam = <l:@L> <name:Name> <ty:(":" <Type>)?> <r:@R> => LambdaParam { name, ty, span: sp(src, l, r) };
+
+Assign<L, R>: Expr = {
+    Or<L, R>,
+    <l:@L> <lhs:Or<L, R>> ":=" <rhs:Or<R, R>> <r:@R> => Expr::Assign(bx(lhs), bx(rhs), sp(src, l, r)),
+};
+Or<L, R>: Expr = {
+    And<L, R>,
+    <l:@L> <a:Or<L, R>> "or" <b:And<R, R>> <r:@R> => binary(BinOp::Or, a, b, sp(src, l, r)),
+};
+And<L, R>: Expr = {
+    Cmp<L, R>,
+    <l:@L> <a:And<L, R>> "and" <b:Cmp<R, R>> <r:@R> => binary(BinOp::And, a, b, sp(src, l, r)),
+};
+Cmp<L, R>: Expr = {
+    Cat<L, R>,
+    <l:@L> <a:Cat<L, R>> <op:CmpOp> <b:Cat<R, R>> <r:@R> => binary(op, a, b, sp(src, l, r)),
+};
+#[inline]
+CmpOp: BinOp = {
+    "==" => BinOp::Eq, "!=" => BinOp::Ne,
+    "<" => BinOp::Lt, "<=" => BinOp::Le, ">" => BinOp::Gt, ">=" => BinOp::Ge,
+};
+Cat<L, R>: Expr = {
+    Add<L, R>,
+    <l:@L> <a:Add<L, R>> "++" <b:Cat<R, R>> <r:@R> => binary(BinOp::Concat, a, b, sp(src, l, r)),
+    <l:@L> <a:Add<L, R>> "::" <b:Cat<R, R>> <r:@R> => binary(BinOp::Cons, a, b, sp(src, l, r)),
+};
+Add<L, R>: Expr = {
+    Mul<L, R>,
+    <l:@L> <a:Add<L, R>> <op:AddOp> <b:Mul<R, R>> <r:@R> => binary(op, a, b, sp(src, l, r)),
+};
+#[inline]
+AddOp: BinOp = { "+" => BinOp::Add, "-" => BinOp::Sub };
+Mul<L, R>: Expr = {
+    Unary<L, R>,
+    <l:@L> <a:Mul<L, R>> <op:MulOp> <b:Unary<R, R>> <r:@R> => binary(op, a, b, sp(src, l, r)),
+};
+#[inline]
+MulOp: BinOp = { "*" => BinOp::Mul, "/" => BinOp::Div, "%" => BinOp::Mod };
+Unary<L, R>: Expr = {
+    Postfix<L>,
+    <l:@L> <op:PrefixOp> <e:Unary<R, R>> <r:@R> => unary(op, e, sp(src, l, r)),
+};
+#[inline]
+PrefixOp: UnOp = { "-" => UnOp::Neg, "not" => UnOp::Not, "ref" => UnOp::Ref, "deref" => UnOp::Deref };
+
+// A field access is not directly callable (`(e.f)(x)` needs the parens), which
+// is what makes `e.m(x)` unambiguously a method call. A bare type or
+// constructor name takes only a method suffix, the associated call `T.m(…)`.
+Postfix<L>: Expr = {
+    Callable<L>,
+    <l:@L> <e:Postfix<L>> "." <f:Name> <r:@R> => Expr::Field(bx(e), f, sp(src, l, r)),
+    <l:@L> <c:"UpperIdent"> <r:@R> => Expr::Ctor(c, Vec::new(), sp(src, l, r)),
+};
+Callable<L>: Expr = {
+    L,
+    <l:@L> <f:Callable<L>> "(" <args:Sep<QArg>> ")" <r:@R> =>? call_or_query(f, args, sp(src, l, r)).map_err(user),
+    <l:@L> <e:Postfix<L>> "." <m:Name> "(" <args:Sep<Expr>> ")" <r:@R> => Expr::Method(bx(e), m, args, sp(src, l, r)),
+    <l:@L> <e:Postfix<L>> "." <i:"int"> <r:@R> =>? proj(e, i, sp(src, l, r)).map_err(user),
+    <l:@L> <e:Postfix<L>> "?" <r:@R> => Expr::Try(bx(e), sp(src, l, r)),
+};
+
+// ---- primaries -------------------------------------------------------------
+
+P: Expr = { PCommon, StructLit, Braced };
+PNB: Expr = { PCommon, StructLit };
+PNS: Expr = { PCommon, Braced };
+
+PCommon: Expr = {
+    <l:@L> <lit:Literal> <r:@R> => Expr::Lit(lit, sp(src, l, r)),
+    <l:@L> <x:Name> <r:@R> => Expr::Var(x, sp(src, l, r)),
+    <l:@L> "self" <r:@R> => Expr::Var("self".to_string(), sp(src, l, r)),
+    "(" <Expr> ")",
+    <l:@L> "(" <e:Expr> "," <mut es:Sep1<Expr>> ")" <r:@R> => { es.insert(0, e); Expr::Tuple(es, sp(src, l, r)) },
+    <l:@L> "[" <es:Sep<Expr>> "]" <r:@R> => Expr::List(es, sp(src, l, r)),
+    <l:@L> <c:"UpperIdent"> "(" <args:Sep1<Expr>> ")" <r:@R> => Expr::Ctor(c, args, sp(src, l, r)),
+    <l:@L> "add" <q:Query> <r:@R> => Expr::Relation(Rel::Add(q), sp(src, l, r)),
+    <l:@L> "clear" <name:Name> <r:@R> => Expr::Relation(Rel::Clear(name), sp(src, l, r)),
+    <l:@L> "solutions" <q:Query> <r:@R> => Expr::Relation(Rel::Solutions(q), sp(src, l, r)),
+};
+StructLit: Expr = <l:@L> <s:"UpperIdent"> "{" <fs:SepTrail<FieldInit>> "}" <r:@R> => Expr::Struct(s, fs, sp(src, l, r));
+FieldInit: (Name, Expr) = <f:Name> ":" <e:Expr> => (f, e);
+
+Literal: Lit = {
+    <n:"int"> => Lit::Int(n),
+    "true" => Lit::Bool(true),
+    "false" => Lit::Bool(false),
+    <s:"str"> => Lit::Str(s),
+    "(" ")" => Lit::Unit,
+};
+
+Braced: Expr = { Block, IfExpr, MatchExpr, WhileExpr, ForExpr };
+
+IfExpr: Expr = <l:@L> "if" <c:ExprNS> <t:Block> <tr:@R> <e:("else" <ElseTail>)?> <r:@R>
+    => { let r = end(e.is_some(), tr, r); Expr::If(bx(c), bx(t), e.map(Box::new), sp(src, l, r)) };
+ElseTail: Expr = { Block, IfExpr };
+MatchExpr: Expr = <l:@L> "match" <s:ExprNS> "{" <arms:Sep1<Arm>> ","? "}" <r:@R>
+    => Expr::Match(bx(s), arms, sp(src, l, r));
+Arm: Arm = <pat:Pattern> <guard:("if" <Expr>)?> "=>" <body:Expr> => Arm { pat, guard, body };
+WhileExpr: Expr = <l:@L> "while" <c:ExprNS> <body:Block> <r:@R> => Expr::While(bx(c), bx(body), sp(src, l, r));
+ForExpr: Expr = {
+    <l:@L> "for" <x:Name> "in" <xs:ExprNS> <body:Block> <r:@R> => Expr::For(x, bx(xs), bx(body), sp(src, l, r)),
+    <l:@L> "for" <q:Query> <body:Block> <r:@R> => Expr::ForQuery(q, bx(body), sp(src, l, r)),
+};
+
+// ---- patterns --------------------------------------------------------------
+
+Pattern: Pattern = {
+    ConsPat,
+    <l:@L> <a:Pattern> "|" <b:ConsPat> <r:@R> => Pattern::Or(Box::new(a), Box::new(b), sp(src, l, r)),
+};
+ConsPat: Pattern = {
+    AtomPat,
+    <l:@L> <h:AtomPat> "::" <t:ConsPat> <r:@R> => Pattern::Cons(Box::new(h), Box::new(t), sp(src, l, r)),
+};
+AtomPat: Pattern = {
+    <l:@L> "_" <r:@R> => Pattern::Wild(sp(src, l, r)),
+    <l:@L> <lit:Literal> <r:@R> => Pattern::Lit(lit, sp(src, l, r)),
+    <l:@L> <x:Name> <r:@R> => Pattern::Var(x, sp(src, l, r)),
+    <l:@L> <c:"UpperIdent"> <r:@R> => Pattern::Ctor(c, Vec::new(), sp(src, l, r)),
+    <l:@L> <c:"UpperIdent"> "(" <ps:Sep1<Pattern>> ")" <r:@R> => Pattern::Ctor(c, ps, sp(src, l, r)),
+    "(" <Pattern> ")",
+    <l:@L> "(" <p:Pattern> "," <mut ps:Sep1<Pattern>> ")" <r:@R> => { ps.insert(0, p); Pattern::Tuple(ps, sp(src, l, r)) },
+    <l:@L> "[" "]" <r:@R> => Pattern::List(Vec::new(), None, sp(src, l, r)),
+    <l:@L> "[" <ps:Sep1<Pattern>> "]" <r:@R> => Pattern::List(ps, None, sp(src, l, r)),
+    <l:@L> "[" <ps:Sep1<Pattern>> "," "..." <rest:Name> "]" <r:@R> => Pattern::List(ps, Some(rest), sp(src, l, r)),
+    <l:@L> <s:"UpperIdent"> "{" <fs:SepTrail<FieldPat>> "}" <r:@R> => Pattern::Struct(s, fs, sp(src, l, r)),
+};
+FieldPat: (Name, Pattern) = <l:@L> <f:Name> <r:@R> <p:(":" <Pattern>)?> => {
+    let p = p.unwrap_or_else(|| Pattern::Var(f.clone(), sp(src, l, r)));
+    (f, p)
+};

@@ -1,0 +1,98 @@
+// (g) an interpreter for a tiny stack language, reading a program from input
+// One token per line: push N | add | sub | mul | dup | swap | print | jz N | jmp N | halt
+
+type Instr = Push(Int) | Add | Sub | Mul | Dup | Swap | Pop | Out | Jz(Int) | Jmp(Int) | Halt;
+
+fn read_program() -> [Instr] {
+    ref prog = [];
+    ref done = false;
+    while not deref done {
+        match read_line_opt() {
+            None => done := true,
+            Some(line) => {
+                let ins = decode(line);
+                match ins {
+                    Some(i) => prog := i :: deref prog,
+                    None => println("bad instruction: " ++ line),
+                }
+            },
+        }
+    }
+    reverse(deref prog)
+}
+
+fn decode(line: String) -> Option<Instr> =
+    match line {
+        "push" => Some(Push(read_int())),
+        "add" => Some(Add),
+        "sub" => Some(Sub),
+        "mul" => Some(Mul),
+        "dup" => Some(Dup),
+        "swap" => Some(Swap),
+        "pop" => Some(Pop),
+        "print" => Some(Out),
+        "jz" => Some(Jz(read_int())),
+        "jmp" => Some(Jmp(read_int())),
+        "halt" => Some(Halt),
+        "" => None,
+        _ => None,
+    };
+
+fn reverse<T>(xs: [T]) -> [T] = fold(xs, [], |acc: [T], x: T| x :: acc);
+
+fn nth<T>(xs: [T], i: Int) -> Option<T> =
+    match xs {
+        [] => None,
+        h :: t => if i == 0 { Some(h) } else { nth(t, i - 1) },
+    };
+
+fn binop(stack: [Int], f: fn(Int, Int) -> Int) -> Result<[Int], String> =
+    match stack {
+        b :: a :: rest => Ok(f(a, b) :: rest),
+        _ => Err("stack underflow"),
+    };
+
+fn step(ins: Instr, stack: [Int], pc: Int) -> Result<([Int], Int), String> =
+    match ins {
+        Push(n) => Ok((n :: stack, pc + 1)),
+        Add => Ok((binop(stack, |a: Int, b: Int| a + b)?, pc + 1)),
+        Sub => Ok((binop(stack, |a: Int, b: Int| a - b)?, pc + 1)),
+        Mul => Ok((binop(stack, |a: Int, b: Int| a * b)?, pc + 1)),
+        Dup => match stack { h :: t => Ok((h :: h :: t, pc + 1)), [] => Err("dup on empty") },
+        Swap => match stack { a :: b :: t => Ok((b :: a :: t, pc + 1)), _ => Err("swap underflow") },
+        Pop => match stack { _ :: t => Ok((t, pc + 1)), [] => Err("pop on empty") },
+        Out => match stack {
+            h :: _ => { println(to_string(h)); Ok((stack, pc + 1)) },
+            [] => Err("print on empty"),
+        },
+        Jz(t) => match stack {
+            0 :: rest => Ok((rest, t)),
+            _ :: rest => Ok((rest, pc + 1)),
+            [] => Err("jz on empty"),
+        },
+        Jmp(t) => Ok((stack, t)),
+        Halt => Ok((stack, -1)),
+    };
+
+fn run(prog: [Instr]) -> Result<[Int], String> {
+    ref stack = [];
+    ref pc = 0;
+    ref fuel = 10000;
+    while deref pc >= 0 and deref pc < len(prog) and deref fuel > 0 {
+        let ins = match nth(prog, deref pc) { Some(i) => i, None => Halt };
+        let r = step(ins, deref stack, deref pc)?; let s2 = r.0; let pc2 = r.1;
+        stack := s2;
+        pc := pc2;
+        fuel := deref fuel - 1;
+    }
+    if deref fuel == 0 { Err("out of fuel") } else { Ok(deref stack) }
+}
+
+fn main() {
+    let prog = read_program();
+    println("loaded " ++ to_string(len(prog)) ++ " instructions");
+    match run(prog) {
+        Ok(stack) => println("final stack: " ++ to_string(stack)),
+        Err(msg) => println("error: " ++ msg),
+    }
+}

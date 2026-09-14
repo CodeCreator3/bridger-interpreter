@@ -1,0 +1,98 @@
+// (d) relations: family tree, transitive closure, same generation, path counting
+
+relation parent : (String, String);
+relation male : (String);
+relation edge : (Int, Int);
+relation weight : (Int, Int, Int);
+relation ancestor : (String, String);
+relation father : (String, String);
+relation sibling : (String, String);
+relation same_gen : (String, String);
+relation person : (String);
+relation path : (Int, Int);
+relation heavy : (Int, Int);
+relation two_hop : (Int, Int, Int);
+relation cheap_two_hop : (Int, Int);
+
+rule ancestor(x, y) :- parent(x, y);
+rule ancestor(x, z) :- parent(x, y) and ancestor(y, z);
+rule father(x, y) :- parent(x, y) and male(x);
+rule sibling(x, y) :- parent(p, x) and parent(p, y) and x != y;
+rule same_gen(x, x) :- person(x);
+rule same_gen(x, y) :- parent(px, x) and parent(py, y) and same_gen(px, py);
+rule person(x) :- parent(x, y);
+rule person(y) :- parent(x, y);
+rule path(a, b) :- edge(a, b);
+rule path(a, c) :- edge(a, b) and path(b, c);
+rule heavy(a, b) :- weight(a, b, w) and is_heavy(w);
+rule cheap_two_hop(a, c) :- two_hop(a, c, w) and w < 10;
+
+fn is_heavy(w: Int) -> Bool = w > 5;
+
+fn count_paths_from(n: Int) -> Int = len(solutions path(n, ?));
+
+fn main() {
+    add parent("tom", "bob");
+    add parent("tom", "liz");
+    add parent("bob", "ann");
+    add parent("bob", "pat");
+    add parent("pat", "jim");
+    add male("tom");
+    add male("bob");
+    add male("pat");
+    add male("jim");
+
+    println("ancestors of jim:");
+    for ancestor(?a, "jim") {
+        println("  " ++ a);
+    }
+    println("tom's descendants: " ++ to_string(solutions ancestor("tom", ?d)));
+    println("fathers: " ++ to_string(solutions father(?f, ?c)));
+    println("siblings of ann: " ++ to_string(solutions sibling("ann", ?s)));
+    println("same gen as ann: " ++ to_string(solutions same_gen("ann", ?y)));
+    println("is tom an ancestor of jim? " ++ to_string(ancestor("tom", "jim")));
+    println("is jim an ancestor of tom? " ++ to_string(ancestor("jim", "tom")));
+    if ancestor("bob", ?) {
+        println("bob has descendants");
+    }
+    println("people: " ++ to_string(len(solutions person(?p))));
+
+    // graph with a cycle; add in a loop
+    for i in range(0, 5) {
+        add edge(i, (i + 1) % 5);
+    }
+    add edge(2, 4);
+    println("paths from 0: " ++ to_string(count_paths_from(0)));
+    println("path(0, 0)? " ++ to_string(path(0, 0)));
+    println("all path pairs: " ++ to_string(len(solutions path(?x, ?y))));
+    clear edge;
+    println("after clear: " ++ to_string(len(solutions path(?x, ?y))));
+    add edge(1, 2);
+    add edge(2, 3);
+    println("after re-add: " ++ to_string(solutions path(?x, ?y)));
+
+    add weight(1, 2, 3);
+    add weight(2, 3, 4);
+    add weight(3, 4, 9);
+    add weight(1, 3, 20);
+    println("heavy: " ++ to_string(solutions heavy(?a, ?b)));
+    // derived columns cannot be computed in a rule; fill two_hop from a loop
+    for weight(?a, ?b, ?w1) {
+        for weight(b, ?c, ?w2) {
+            add two_hop(a, c, w1 + w2);
+        }
+    }
+    println("two_hop: " ++ to_string(solutions two_hop(?a, ?c, ?w)));
+    println("cheap two-hop: " ++ to_string(solutions cheap_two_hop(?a, ?c)));
+    let sols = solutions two_hop(1, ?c, ?w);
+    for s in sols {
+        let c = s.0; let w = s.1;
+        println("1 -> " ++ to_string(c) ++ " costs " ++ to_string(w));
+    }
+    ref total = 0;
+    for weight(?, ?, ?w) {
+        total := deref total + w;
+    }
+    println("total weight: " ++ to_string(deref total));
+    println(to_string(solutions weight(1, 2, 3)) ++ " " ++ to_string(solutions weight(9, 9, 9)));
+}

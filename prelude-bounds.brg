@@ -1,0 +1,26 @@
+// The bounded prelude functions  [frozen — do not edit]  (loaded from M8)
+//
+// Until M8 these five are native primitives over the built-in types: `min`,
+// `max`, `minimum`, `maximum` compare `Int`/`String`/`Bool`; `len` measures a
+// `String` or a list. From M8 they are the ordinary Bridger below, written
+// over the prelude traits (`Ord::cmp`, `Len::length`), so a user `impl Ord`
+// or `impl Len` flows through them with no special case — the bound is the
+// whole mechanism. The built-in types keep their conformances: with no `impl`
+// for the receiver, `1.cmp(2)` and `"ab".length()` resolve to a native.
+
+fn min<T: Ord>(a: T, b: T) -> T = match a.cmp(b) { Greater => b, _ => a };
+fn max<T: Ord>(a: T, b: T) -> T = match a.cmp(b) { Less => b, _ => a };
+
+fn minimum<T: Ord>(xs: [T]) -> Option<T> =
+    match xs {
+        [] => None,
+        h :: t => Some(fold(t, h, min)),
+    };
+
+fn maximum<T: Ord>(xs: [T]) -> Option<T> =
+    match xs {
+        [] => None,
+        h :: t => Some(fold(t, h, max)),
+    };
+
+fn len<T: Len>(xs: T) -> Int = xs.length();

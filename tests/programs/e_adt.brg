@@ -1,0 +1,119 @@
+// (e) ADTs: expression tree, evaluator, simplifier, Option/Result pipelines with ?
+
+type Expr = Num(Int) | Var(String) | Add(Expr, Expr) | Mul(Expr, Expr) | Neg(Expr) | Div(Expr, Expr);
+
+fn lookup(env: [(String, Int)], x: String) -> Option<Int> =
+    match env {
+        [] => None,
+        [(k, v), ...rest] => if k == x { Some(v) } else { lookup(rest, x) },
+    };
+
+fn eval(e: Expr, env: [(String, Int)]) -> Result<Int, String> =
+    match e {
+        Num(n) => Ok(n),
+        Var(x) => match lookup(env, x) {
+            Some(v) => Ok(v),
+            None => Err("unbound: " ++ x),
+        },
+        Add(a, b) => Ok(eval(a, env)? + eval(b, env)?),
+        Mul(a, b) => Ok(eval(a, env)? * eval(b, env)?),
+        Neg(a) => Ok(- eval(a, env)?),
+        Div(a, b) => {
+            let d = eval(b, env)?;
+            if d == 0 { Err("division by zero") } else { Ok(eval(a, env)? / d) }
+        },
+    };
+
+fn simplify(e: Expr) -> Expr =
+    match e {
+        Add(a, b) => match (simplify(a), simplify(b)) {
+            (Num(0), s) | (s, Num(0)) => s,
+            (Num(x), Num(y)) => Num(x + y),
+            (x, y) => Add(x, y),
+        },
+        Mul(a, b) => match (simplify(a), simplify(b)) {
+            (Num(0), _) | (_, Num(0)) => Num(0),
+            (Num(1), s) | (s, Num(1)) => s,
+            (Num(x), Num(y)) => Num(x * y),
+            (x, y) => Mul(x, y),
+        },
+        Neg(a) => match simplify(a) {
+            Num(n) => Num(-n),
+            Neg(inner) => inner,
+            s => Neg(s),
+        },
+        Div(a, b) => Div(simplify(a), simplify(b)),
+        other => other,
+    };
+
+fn show(e: Expr) -> String =
+    match e {
+        Num(n) if n < 0 => "(" ++ to_string(n) ++ ")",
+        Num(n) => to_string(n),
+        Var(x) => x,
+        Add(a, b) => "(" ++ show(a) ++ " + " ++ show(b) ++ ")",
+        Mul(a, b) => show(a) ++ " * " ++ show(b),
+        Neg(a) => "-" ++ show(a),
+        Div(a, b) => show(a) ++ " / " ++ show(b),
+    };
+
+fn size(e: Expr) -> Int =
+    match e {
+        Num(_) | Var(_) => 1,
+        Add(a, b) | Mul(a, b) | Div(a, b) => 1 + size(a) + size(b),
+        Neg(a) => 1 + size(a),
+    };
+
+fn first_two(xs: [Int]) -> Option<(Int, Int)> =
+    match xs {
+        [a, b, ...rest] => Some((a, b)),
+        _ => None,
+    };
+
+fn sum_pair(xs: [Int]) -> Option<Int> {
+    let ab = first_two(xs)?; let a = ab.0; let b = ab.1;
+    Some(a + b)
+}
+
+fn safe_div(a: Int, b: Int) -> Result<Int, String> =
+    if b == 0 { Err("div by zero") } else { Ok(a / b) };
+
+fn avg_of_ratios(ps: [(Int, Int)]) -> Result<Int, String> {
+    ref total = 0;
+    for p in ps {
+        total := deref total + safe_div(p.0, p.1)?;
+    }
+    safe_div(deref total, len(ps))
+}
+
+fn describe(xs: [Int]) -> String =
+    match xs {
+        [] => "empty",
+        [x] => "one: " ++ to_string(x),
+        [x, y] if x == y => "pair of equal " ++ to_string(x),
+        [x, y] => "pair " ++ to_string(x) ++ "," ++ to_string(y),
+        [h, ...t] if len(t) > 3 => "long, starts " ++ to_string(h),
+        h :: t => "starts " ++ to_string(h) ++ " then " ++ to_string(len(t)) ++ " more",
+    };
+
+fn main() {
+    let env = [("x", 5), ("y", 0)];
+    let e1 = Add(Mul(Num(1), Var("x")), Add(Num(0), Neg(Neg(Num(3)))));
+    println(show(e1) ++ " => " ++ show(simplify(e1)));
+    println(to_string(eval(e1, env)) ++ " " ++ to_string(eval(simplify(e1), env)));
+    println(to_string(size(e1)) ++ " -> " ++ to_string(size(simplify(e1))));
+    println(to_string(eval(Div(Num(10), Var("y")), env)));
+    println(to_string(eval(Add(Var("z"), Num(1)), env)));
+    println(to_string(eval(Mul(Num(0), Var("z")), env)));
+    println(to_string(sum_pair([1, 2, 3])) ++ " " ++ to_string(sum_pair([1])));
+    println(to_string(avg_of_ratios([(10, 2), (9, 3), (8, 4)])));
+    println(to_string(avg_of_ratios([(10, 2), (9, 0)])));
+    println(to_string(avg_of_ratios([])));
+    println(describe([]) ++ "; " ++ describe([7]) ++ "; " ++ describe([2, 2]) ++ "; " ++ describe([2, 3]));
+    println(describe([1, 2, 3, 4, 5]) ++ "; " ++ describe([1, 2, 3]));
+    let opts = [Some(1), None, Some(3)];
+    let total = fold(opts, 0, |acc: Int, o: Option<Int>| acc + unwrap_or(o, 0));
+    println(to_string(total));
+    println(to_string(eval(e1, env) == Ok(8)) ++ " " ++ to_string(simplify(e1) == Add(Var("x"), Num(3))));
+    println(to_string(map([Less, Equal, Greater], |o: Ordering| match o { Less => -1, Equal => 0, Greater => 1 })));
+}

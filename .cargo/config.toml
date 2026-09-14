@@ -1,0 +1,17 @@
+# `cargo mN` runs every test in force at Milestone N (see [features] in Cargo.toml).
+[alias]
+m1 = "test --features m1"
+m2 = "test --features m2"
+m3 = "test --features m3"
+m4 = "test --features m4"
+m5 = "test --features m5"
+m6 = "test --features m6"
+m7 = "test --features m7"
+m8 = "test --features m8"
+
+# A Bridger call is several nested `eval_expr` frames, so a deeply recursive
+# program needs far more stack than a thread's 2 MiB default. `cargo run` and
+# `cargo test` inherit this; the `bridger` binary spawns its own 2 GiB thread so
+# it does not depend on it. The memory is virtual and committed only as used.
+[env]
+RUST_MIN_STACK = "2147483648"

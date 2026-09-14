@@ -1,0 +1,61 @@
+// (a) expression-level: arithmetic, strings, lists without HOFs
+
+fn gcd(a: Int, b: Int) -> Int = if b == 0 { a } else { gcd(b, a % b) };
+fn lcm(a: Int, b: Int) -> Int = a / gcd(a, b) * b;
+fn pow(b: Int, e: Int) -> Int = if e == 0 { 1 } else { b * pow(b, e - 1) };
+fn digit_sum(n: Int) -> Int = if n < 10 { n } else { n % 10 + digit_sum(n / 10) };
+fn is_prime(n: Int) -> Bool = n >= 2 and no_factor(n, 2);
+fn no_factor(n: Int, d: Int) -> Bool =
+    if d * d > n { true } else if n % d == 0 { false } else { no_factor(n, d + 1) };
+fn isqrt(n: Int) -> Int = isqrt_from(n, 0);
+fn isqrt_from(n: Int, r: Int) -> Int =
+    if (r + 1) * (r + 1) > n { r } else { isqrt_from(n, r + 1) };
+
+fn repeat(s: String, n: Int) -> String = if n <= 0 { "" } else { s ++ repeat(s, n - 1) };
+fn pad_left(s: String, w: Int) -> String = repeat(" ", w - len(s)) ++ s;
+fn join(xs: [String], sep: String) -> String =
+    if len(xs) == 0 { "" }
+    else if len(xs) == 1 { unwrap_or(head(xs), "") }
+    else { unwrap_or(head(xs), "") ++ sep ++ join(unwrap_or(tail(xs), []), sep) };
+fn show_ints(xs: [Int]) -> String = "[" ++ join(ints_to_strs(xs), ", ") ++ "]";
+fn ints_to_strs(xs: [Int]) -> [String] =
+    if len(xs) == 0 { [] }
+    else { to_string(unwrap_or(head(xs), 0)) :: ints_to_strs(unwrap_or(tail(xs), [])) };
+
+fn sum(xs: [Int]) -> Int =
+    if len(xs) == 0 { 0 } else { unwrap_or(head(xs), 0) + sum(unwrap_or(tail(xs), [])) };
+fn reverse(xs: [Int]) -> [Int] = rev_onto(xs, []);
+fn rev_onto(xs: [Int], acc: [Int]) -> [Int] =
+    if len(xs) == 0 { acc }
+    else { rev_onto(unwrap_or(tail(xs), []), unwrap_or(head(xs), 0) :: acc) };
+fn take(xs: [Int], n: Int) -> [Int] =
+    if n <= 0 or len(xs) == 0 { [] }
+    else { unwrap_or(head(xs), 0) :: take(unwrap_or(tail(xs), []), n - 1) };
+fn nth(xs: [Int], i: Int) -> Int =
+    if i == 0 { unwrap_or(head(xs), -1) } else { nth(unwrap_or(tail(xs), []), i - 1) };
+fn primes_upto(n: Int) -> [Int] = primes_from(2, n);
+fn primes_from(i: Int, n: Int) -> [Int] =
+    if i > n { [] } else if is_prime(i) { i :: primes_from(i + 1, n) } else { primes_from(i + 1, n) };
+
+fn main() {
+    println("gcd(48, 18) = " ++ to_string(gcd(48, 18)));
+    println("lcm(4, 6) = " ++ to_string(lcm(4, 6)));
+    println("2^10 = " ++ to_string(pow(2, 10)));
+    println("digit_sum(98765) = " ++ to_string(digit_sum(98765)));
+    println("isqrt(99) = " ++ to_string(isqrt(99)));
+    println("primes <= 30: " ++ show_ints(primes_upto(30)));
+    println(pad_left("42", 6) ++ "|");
+    println(repeat("ab", 3));
+    println(join(["x", "y", "z"], "-"));
+    let xs = [3, 1, 4, 1, 5, 9, 2, 6];
+    println("sum = " ++ to_string(sum(xs)));
+    println("reverse = " ++ show_ints(reverse(xs)));
+    println("take 3 = " ++ show_ints(take(xs, 3)));
+    println("nth 5 = " ++ to_string(nth(xs, 5)));
+    println("nth 99 = " ++ to_string(nth(xs, 99)));
+    println("-7 / 2 = " ++ to_string(-7 / 2) ++ ", -7 % 2 = " ++ to_string(-7 % 2));
+    println(to_string(9223372036854775807 + 1));
+    println(to_string(1_000_000 * 1_000));
+    println(to_string(("a" ++ "b") == "ab") ++ " " ++ to_string([1, 2] == [1, 2]));
+    println("tab\there \"quoted\" \u{1F600}");
+}

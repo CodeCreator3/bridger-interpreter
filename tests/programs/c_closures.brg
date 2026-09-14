@@ -1,0 +1,98 @@
+// (c) functions and closures: HOF pipelines, closures over refs, mutual recursion, currying
+
+fn make_counter() -> fn() -> Int {
+    ref n = 0;
+    || { n := deref n + 1; deref n }
+}
+
+fn make_adder(k: Int) -> fn(Int) -> Int = |x: Int| x + k;
+
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int = |x: Int| f(g(x));
+
+fn curry_add(a: Int) -> fn(Int) -> fn(Int) -> Int = |b: Int| |c: Int| a + b + c;
+
+fn is_even(n: Int) -> Bool = if n == 0 { true } else { is_odd(n - 1) };
+fn is_odd(n: Int) -> Bool = if n == 0 { false } else { is_even(n - 1) };
+
+fn sum_list(xs: [Int]) -> Int = fold(xs, 0, |a: Int, x: Int| a + x);
+fn squares(xs: [Int]) -> [Int] = map(xs, |x: Int| x * x);
+fn evens(xs: [Int]) -> [Int] = filter(xs, even);
+fn any(xs: [Int], p: fn(Int) -> Bool) -> Bool = fold(xs, false, |a: Bool, x: Int| a or p(x));
+fn reverse<T>(xs: [T]) -> [T] = fold(xs, [], |acc: [T], x: T| x :: acc);
+fn length<T>(xs: [T]) -> Int = fold(xs, 0, |n: Int, x: T| n + 1);
+
+// memo table as an assoc list held in a ref
+fn lookup(tbl: [(Int, Int)], k: Int) -> Option<Int> =
+    match tbl {
+        [] => None,
+        (k2, v) :: rest => if k2 == k { Some(v) } else { lookup(rest, k) },
+    };
+
+fn make_memo_fib() -> fn(Int) -> Int {
+    ref table = [(0, 0), (1, 1)];
+    ref calls = 0;
+    let fib = |n: Int| {
+        calls := deref calls + 1;
+        let go = |m: Int| fib_via(table, m);
+        go(n)
+    };
+    fib
+}
+// helper: iterate up, filling the table
+fn fib_via(table: ref<[(Int, Int)]>, n: Int) -> Int {
+    ref i = 2;
+    while deref i <= n {
+        let k = deref i;
+        if not is_some(lookup(deref table, k)) {
+            let a = unwrap_or(lookup(deref table, k - 1), 0);
+            let b = unwrap_or(lookup(deref table, k - 2), 0);
+            table := (k, a + b) :: deref table;
+        }
+        i := deref i + 1;
+    }
+    unwrap_or(lookup(deref table, n), 0)
+}
+
+fn apply_n(f: fn(Int) -> Int, n: Int, x: Int) -> Int =
+    if n == 0 { x } else { apply_n(f, n - 1, f(x)) };
+
+fn pipeline(xs: [Int]) -> Int {
+    let step1 = filter(xs, |x: Int| x % 3 != 0);
+    let step2 = map(step1, make_adder(10));
+    fold(step2, 1, |a: Int, x: Int| a * x % 1000)
+}
+
+fn main() {
+    let c1 = make_counter();
+    let c2 = make_counter();
+    c1(); c1();
+    println(to_string(c1()) ++ " " ++ to_string(c2()));
+    let add5 = make_adder(5);
+    let double = |x: Int| x * 2;
+    println(to_string(compose(add5, double)(10)) ++ " " ++ to_string(compose(double, add5)(10)));
+    println(to_string(curry_add(1)(2)(3)));
+    println(to_string(is_even(10)) ++ " " ++ to_string(is_odd(7)) ++ " " ++ to_string(is_even(7)));
+    let xs = range(1, 11);
+    println(to_string(sum_list(squares(evens(xs)))));
+    println(to_string(any(xs, |x: Int| x > 9)) ++ " " ++ to_string(any(xs, |x: Int| x > 10)));
+    println(to_string(reverse(["a", "b", "c"])));
+    println(to_string(length(reverse(xs))));
+    let mf = make_memo_fib();
+    println(to_string(mf(30)) ++ " " ++ to_string(mf(31)));
+    println(to_string(apply_n(double, 10, 1)));
+    println(to_string(pipeline(xs)));
+    let fs = map(range(0, 4), make_adder);
+    println(to_string(map(fs, |f: fn(Int) -> Int| f(100))));
+    let sorted = insertion_sort([5, 2, 9, 1, 5, 6], |a: Int, b: Int| a <= b);
+    println(to_string(sorted));
+    let by_desc = insertion_sort([5, 2, 9, 1, 5, 6], |a: Int, b: Int| a >= b);
+    println(to_string(by_desc));
+}
+
+fn insert(x: Int, xs: [Int], le: fn(Int, Int) -> Bool) -> [Int] =
+    match xs {
+        [] => [x],
+        h :: t => if le(x, h) { x :: xs } else { h :: insert(x, t, le) },
+    };
+fn insertion_sort(xs: [Int], le: fn(Int, Int) -> Bool) -> [Int] =
+    fold(xs, [], |acc: [Int], x: Int| insert(x, acc, le));

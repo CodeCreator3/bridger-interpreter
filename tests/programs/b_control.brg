@@ -1,0 +1,113 @@
+// (b) bindings, blocks, loops with ref counters, early return
+
+fn count_down(n: Int) -> String {
+    ref i = n;
+    ref out = "";
+    while deref i > 0 {
+        out := deref out ++ to_string(deref i) ++ " ";
+        i := deref i - 1;
+    }
+    deref out ++ "liftoff"
+}
+
+fn sum_to(n: Int) -> Int {
+    ref acc = 0;
+    for x in range(1, n + 1) {
+        acc := deref acc + x;
+    }
+    deref acc
+}
+
+fn find_first_even(xs: [Int]) -> Int {
+    for x in xs {
+        if even(x) {
+            return x;
+        }
+    }
+    -1
+}
+
+fn collatz_steps(n: Int) -> Int {
+    ref k = n;
+    ref steps = 0;
+    while deref k != 1 {
+        if even(deref k) {
+            k := deref k / 2;
+        } else {
+            k := 3 * deref k + 1;
+        }
+        steps := deref steps + 1;
+    }
+    deref steps
+}
+
+fn fib_iter(n: Int) -> Int {
+    ref a = 0;
+    ref b = 1;
+    ref i = 0;
+    while deref i < n {
+        let t = deref a + deref b;
+        a := deref b;
+        b := t;
+        i := deref i + 1;
+    }
+    deref a
+}
+
+fn classify(n: Int) -> String {
+    if n < 0 {
+        "negative"
+    } else if n == 0 {
+        "zero"
+    } else if n < 10 {
+        "small"
+    } else {
+        "large"
+    }
+}
+
+fn swap_demo() -> String {
+    ref a = 1;
+    ref b = 2;
+    let c = a;          // alias
+    c := 10;
+    let t = deref a;
+    a := deref b;
+    b := t;
+    to_string(deref a) ++ "," ++ to_string(deref b) ++ "," ++ to_string(deref c)
+}
+
+fn nested_break(limit: Int) -> Int {
+    ref found = 0;
+    ref i = 1;
+    while deref i <= limit and deref found == 0 {
+        ref j = 1;
+        while deref j <= limit {
+            if deref i * deref j == 42 {
+                found := deref i * 100 + deref j;
+            }
+            j := deref j + 1;
+        }
+        i := deref i + 1;
+    }
+    deref found
+}
+
+fn main() {
+    println(count_down(5));
+    println(to_string(sum_to(100)));
+    println(to_string(find_first_even([1, 3, 8, 5, 6])));
+    println(to_string(find_first_even([1, 3])));
+    println(to_string(collatz_steps(27)));
+    println(to_string(fib_iter(50)));
+    println(classify(-3) ++ " " ++ classify(0) ++ " " ++ classify(7) ++ " " ++ classify(70));
+    println(swap_demo());
+    println(to_string(nested_break(10)));
+    let v = { let x = 3; let y = 4; x * x + y * y };
+    println(to_string(v));
+    let shadow = 1;
+    let shadow = shadow + 1;
+    println(to_string(shadow));
+    let w = while false { };
+    println(to_string(w == ()));
+}

@@ -1,0 +1,43 @@
+[package]
+name = "bridger"
+version = "0.1.0"
+edition = "2021"
+description = "The Bridger interpreter — student starter crate."
+license = "MIT"
+publish = false
+
+[lib]
+name = "bridger"
+path = "src/lib.rs"
+
+# `error.rs` derives `thiserror::Error` for the error `Display`s; the `bridger`
+# binary renders each error as a labeled source excerpt through `miette`.
+[dependencies]
+lalrpop-util = { version = "0.23", default-features = false, features = ["std"] }
+thiserror = "2"
+miette = { version = "7", features = ["fancy"] }
+
+# Milestone gates for the tests in `tests/`. They are cumulative — enabling
+# `m3` also enables `m2` and `m1` — so `cargo test --features m3` runs every
+# test in force at Milestone 3. `.cargo/config.toml` aliases that to `cargo m3`.
+# With no feature named, plain `cargo test` runs the M1 set.
+[features]
+default = ["m1"]
+m1 = []
+m2 = ["m1"]
+m3 = ["m2"]
+m4 = ["m3"]
+m5 = ["m4"]
+m6 = ["m5"]
+m7 = ["m6"]
+m8 = ["m7"]
+
+[build-dependencies]
+lalrpop = "0.23"
+
+# Light optimization in the dev/test profile: an unoptimized `eval_expr` frame is
+# tens of kilobytes, which caps Bridger recursion at a few thousand calls even on
+# the 2 GiB stack `.cargo/config.toml` provides. `opt-level = 1` shrinks the
+# frames by an order of magnitude and keeps debug info and overflow checks.
+[profile.dev]
+opt-level = 1

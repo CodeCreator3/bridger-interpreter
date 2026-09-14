@@ -1,0 +1,111 @@
+// (f) structs, impls, traits, generics with bounds, associated constructors, From + ?
+
+struct Point { x: Int, y: Int }
+struct Pair<A, B> { fst: A, snd: B }
+struct Stack<T> { items: [T] }
+struct Rect { tl: Point, br: Point }
+
+trait Show { fn show(self) -> String; }
+trait Area { fn area(self) -> Int; }
+
+impl Point {
+    fn new(x: Int, y: Int) -> Self = Point { x: x, y: y };
+    fn origin() -> Point = Point.new(0, 0);
+    fn add(self, other: Point) -> Point = Point { x: self.x + other.x, y: self.y + other.y };
+    fn manhattan(self) -> Int = abs(self.x) + abs(self.y);
+}
+impl Show for Point { fn show(self) -> String = "(" ++ to_string(self.x) ++ ", " ++ to_string(self.y) ++ ")"; }
+impl Ord for Point {
+    fn cmp(self, other: Self) -> Ordering =
+        match self.manhattan().cmp(other.manhattan()) {
+            Equal => self.x.cmp(other.x),
+            o => o,
+        };
+}
+impl Area for Rect { fn area(self) -> Int = (self.br.x - self.tl.x) * (self.br.y - self.tl.y); }
+impl Show for Rect { fn show(self) -> String = "Rect[" ++ self.tl.show() ++ "-" ++ self.br.show() ++ "]"; }
+
+impl<A: Show, B: Show> Show for Pair<A, B> {
+    fn show(self) -> String = "<" ++ self.fst.show() ++ ", " ++ self.snd.show() ++ ">";
+}
+impl Show for Int { fn show(self) -> String = to_string(self); }
+impl Show for String { fn show(self) -> String = "\"" ++ self ++ "\""; }
+impl<T: Show> Show for [T] {
+    fn show(self) -> String = "[" ++ fold(self, "", |acc: String, x: T| if acc == "" { x.show() } else { acc ++ "; " ++ x.show() }) ++ "]";
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> = Stack { items: [] };
+    fn push(self, x: T) -> Stack<T> = Stack { items: x :: self.items };
+    fn pop(self) -> Option<(T, Stack<T>)> =
+        match self.items {
+            [] => None,
+            h :: t => Some((h, Stack { items: t })),
+        };
+    fn peek(self) -> Option<T> = head(self.items);
+    fn is_empty(self) -> Bool = len(self.items) == 0;
+}
+impl<T> Len for Stack<T> { fn length(self) -> Int = len(self.items); }
+
+fn show_all<T: Show>(xs: [T]) -> String = xs.show();
+fn largest<T: Ord>(xs: [T]) -> Option<T> = maximum(xs);
+fn sort_by_cmp<T: Ord>(xs: [T]) -> [T] = fold(xs, [], |acc: [T], x: T| ins(acc, x));
+fn ins<T: Ord>(xs: [T], x: T) -> [T] =
+    match xs {
+        [] => [x],
+        h :: t => match x.cmp(h) { Greater => h :: ins(t, x), _ => x :: xs },
+    };
+fn same<T: Eq>(a: T, b: T) -> Bool = a == b;
+
+// From + ?
+struct ParseError { msg: String }
+struct AppError { code: Int, what: String }
+impl From<ParseError> for AppError {
+    fn from(e: ParseError) -> Self = AppError { code: 1, what: "parse: " ++ e.msg };
+}
+impl From<String> for AppError {
+    fn from(s: String) -> AppError = AppError { code: 2, what: s };
+}
+fn parse_digit(s: String) -> Result<Int, ParseError> =
+    if s == "0" { Ok(0) } else if s == "1" { Ok(1) } else if s == "2" { Ok(2) }
+    else { Err(ParseError { msg: "not a digit: " ++ s }) };
+fn check_pos(n: Int) -> Result<Int, String> = if n > 0 { Ok(n) } else { Err("not positive") };
+fn run(s: String) -> Result<Int, AppError> {
+    let d = parse_digit(s)?;
+    let p = check_pos(d)?;
+    Ok(p * 10)
+}
+fn report(r: Result<Int, AppError>) -> String =
+    match r {
+        Ok(n) => "ok " ++ to_string(n),
+        Err(AppError { code, what }) => "err " ++ to_string(code) ++ ": " ++ what,
+    };
+
+fn main() {
+    let p = Point.new(3, -4);
+    let q = Point { y: 1, x: 2 };
+    println(p.show() ++ " + " ++ q.show() ++ " = " ++ p.add(q).show());
+    println(to_string(Point.origin() == Point { x: 0, y: 0 }));
+    println(to_string(p.manhattan()) ++ " " ++ to_string(min(p, q).show()) ++ " " ++ to_string(max(p, q).show()));
+    let r = Rect { tl: Point.origin(), br: Point.new(4, 5) };
+    println(r.show() ++ " area " ++ to_string(r.area()));
+    let pr = Pair { fst: 7, snd: "seven" };
+    println(pr.show());
+    println(show_all([Point.new(1, 1), Point.new(2, 2)]));
+    println(show_all([[1, 2], [3]]));
+    println(to_string(largest([Point.new(1, 1), Point.new(5, 0), Point.new(0, -5)])));
+    println(to_string(largest([3, 9, 2])) ++ " " ++ to_string(largest(["b", "a"])));
+    println(sort_by_cmp([Point.new(2, 2), Point.new(0, 1), Point.new(-1, -1)]).show());
+    println(to_string(sort_by_cmp(["pear", "apple", "fig"])));
+    let s = Stack.new().push(1).push(2).push(3);
+    println(to_string(len(s)) ++ " " ++ to_string(s.peek()) ++ " " ++ to_string(s.is_empty()));
+    match s.pop() {
+        Some((top, rest)) => println(to_string(top) ++ " then " ++ to_string(rest.items)),
+        None => println("empty"),
+    }
+    let e: Stack<String> = Stack.new();
+    println(to_string(e.is_empty()) ++ " " ++ to_string(e.pop()));
+    println(to_string(same(Point.new(1, 2), Point.new(1, 2))) ++ " " ++ to_string(same([1], [2])));
+    println(report(run("2")) ++ "; " ++ report(run("0")) ++ "; " ++ report(run("x")));
+    println(to_string(p) ++ " " ++ to_string(pr) ++ " " ++ to_string(s));
+}

@@ -1,0 +1,28 @@
+// The Bridger-written prelude  [frozen — do not edit]
+//
+// The built-in algebraic data types and the prelude traits. The primitives
+// (I/O, `head`/`tail`, `range`, ...) and the higher-order list functions
+// (`map`/`filter`/`fold`, which iterate natively so a long list costs no
+// stack) are native Rust — see `src/interp/prelude.rs`; the bounded functions
+// (`len`, `min`/`max`, ...) are native until M8 and Bridger from it — see
+// `prelude-bounds.brg`. Everything here is ordinary Bridger, loaded by
+// `Interpreter::new`.
+
+type Option<T> = None | Some(T);
+type Result<T, E> = Ok(T) | Err(E);
+type Ordering = Less | Equal | Greater;
+
+// The prelude traits (Part IX). Users may `impl` these for their own types
+// at M8; the built-in types conform by a rule the type checker knows, since
+// some (e.g. `Ord for String`) have no Bridger-writable comparison. The bounded
+// native functions (`min`/`max`/`len`/...) are typed against these bounds.
+// Two traits with no methods: a type satisfies `Eq` when it admits equality
+// and `Print` when it can be printed — both decided by the type's shape
+// (data all the way down; no functions inside), never by an `impl`. They
+// exist to be written as bounds: `fn member<T: Eq>(x: T, xs: [T]) -> Bool`.
+trait Eq {}
+trait Print {}
+trait Ord { fn cmp(self, other: Self) -> Ordering; }
+trait Len { fn length(self) -> Int; }
+trait From<T> { fn from(x: T) -> Self; }
+

@@ -1,0 +1,15 @@
+(1 * x + (0 + --3)) => (x + 3)
+Ok(8) Ok(8)
+9 -> 3
+Err("division by zero")
+Err("unbound: z")
+Err("unbound: z")
+Some(3) None
+Ok(3)
+Err("div by zero")
+Err("div by zero")
+empty; one: 7; pair of equal 2; pair 2,3
+long, starts 1; starts 1 then 2 more
+4
+true true
+[-1, 0, 1]
