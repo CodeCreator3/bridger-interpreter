@@ -28,8 +28,8 @@
 //! ambiguous (both M8). Record at the same span the evaluator looks up, or the
 //! choice is silently lost.
 
-use crate::ast::{Expr, Rule, Span, Ty};
 use super::{Checker, Ctx, TyError};
+use crate::ast::{Expr, Rule, Span, Ty};
 
 impl Checker {
     /// The type of `e` in context `ctx`, checked against `expected` when one
@@ -48,7 +48,9 @@ impl Checker {
             Expr::Lit(..) => todo_m5!("T-Int / T-Bool / T-Str / T-Unit"),
             Expr::Var(..) => todo_m5!("T-Var / T-Self"),
             Expr::Unary(..) => todo_m5!("T-Neg / T-Not / T-Ref / T-Deref"),
-            Expr::Binary(..) => todo_m5!("T-Arith / T-Ord / T-Eq / T-And / T-Or / T-Concat / T-Cons"),
+            Expr::Binary(..) => {
+                todo_m5!("T-Arith / T-Ord / T-Eq / T-And / T-Or / T-Concat / T-Cons")
+            }
             Expr::Tuple(..) => todo_m5!("T-Tuple"),
             Expr::List(..) => todo_m5!("T-List"),
             Expr::Proj(..) => todo_m5!("T-Proj"),
@@ -58,7 +60,9 @@ impl Checker {
             Expr::For(..) => todo_m5!("T-For"),
             Expr::Assign(..) => todo_m5!("T-Assign"),
             Expr::Return(..) => todo_m5!("T-Return (reads ctx.ret())"),
-            Expr::Lambda(..) => todo_m5!("T-Lam (parameter types from `expected`, the annotation, or a fresh meta)"),
+            Expr::Lambda(..) => {
+                todo_m5!("T-Lam (parameter types from `expected`, the annotation, or a fresh meta)")
+            }
             Expr::Call(..) => todo_m5!("T-App (first-order matching of generics at the call)"),
 
             // ---- M6: relations ----

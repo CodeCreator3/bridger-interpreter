@@ -28,8 +28,8 @@
 //! quietly passes its payload through unconverted.
 
 use super::Interpreter;
-use crate::ast::Expr;
 use super::{Control, Env, Value};
+use crate::ast::Expr;
 
 impl Interpreter {
     /// Evaluate `e` in environment `env`.
@@ -41,7 +41,9 @@ impl Interpreter {
             // ---- M1: expressions ----
             Expr::Lit(..) => todo_m1!("E-Lit"),
             Expr::Unary(..) => todo_m1!("E-Neg / E-Not (ref & deref join at M3)"),
-            Expr::Binary(..) => todo_m1!("E-Arith / E-Ord / E-Eq / E-And / E-Or / E-Concat / E-Cons"),
+            Expr::Binary(..) => {
+                todo_m1!("E-Arith / E-Ord / E-Eq / E-And / E-Or / E-Concat / E-Cons")
+            }
             Expr::Tuple(..) => todo_m1!("E-Tuple"),
             Expr::List(..) => todo_m1!("E-List"),
             Expr::Proj(..) => todo_m1!("E-Proj (tuple projection)"),
