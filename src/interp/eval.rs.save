@@ -30,13 +30,6 @@
 use super::Interpreter;
 use super::{Control, Env, Value};
 use crate::ast::Expr;
-use crate::ast::Lit;
-use crate::ast::UnOp;
-use crate::ast::BinOp;
-use crate::ast::Span;
-use crate::interp::RuntimeError;
-use crate::interp::Ty;
-use crate::interp::TyKind;
 
 impl Interpreter {
     /// Evaluate `e` in environment `env`.
@@ -46,12 +39,12 @@ impl Interpreter {
         let _ = env;
         match e {
             // ---- M1: expressions ----
-            Expr::Lit(lit, span) => Self::literal(lit, span),
-            Expr::Unary(op, expr, span) => Self::unary(op, expr, span),
-            Expr::Binary(op, expr1, expr2, span) => Self::binary(op, expr1, expr2, span),
-            Expr::Tuple(exprs, span) => Self::tuple(exprs, span),
-            Expr::List(exprs, span) => Self::list(exprs, span),
-            Expr::Proj(expr, num, span) => Self::proj(expr, num, span),
+            Expr::Lit(lit, span) => literal(lit, span),
+            Expr::Unary(op, expr, span) => unary(lit, expr, span),
+            Expr::Binary(op, expr1, expr2, span) => binary(op, expr1, expr2, span)
+            Expr::Tuple(exprs, span) => tuple(exprs, span),
+            Expr::List(exprs, span) => list(exprs, span),
+            Expr::Proj(expr, num, span) => proj(expr, num, span),
 
             // ---- M2: binding ----
             Expr::Var(..) => todo_m2!("E-Var"),
@@ -83,79 +76,36 @@ impl Interpreter {
             Expr::Method(..) => todo_m8!("E-Method (head-type dispatch)"),
         }
     }
-    fn literal(lit: &Lit, span: &Span) -> Result<Value, Control> {
+    fn literal(lit: Lit, span: Span) -> Result<Value, Control> {
         Ok(match lit {
             Lit::Int(n)  => Value::Int(*n),
             Lit::Bool(b) => Value::Bool(*b),
-            Lit::Str(s)  => Value::Str(s.clone().into()),
+            Lit::Str(s)  => Value::Str(s.clone()),
             Lit::Unit    => Value::Unit,
-        })
-    }
-    fn unary(op: &UnOp, expr: &Box<Expr>, span: &Span) -> Result<Value, Control> {
-        match op {
-            UnOp::Neg => Self::neg(**expr, span),
-            UnOp::Not => Self::not(**expr, span),
         }
     }
-    fn neg(expr: Expr, span: &Span) -> Result<Value, Control>{
-        match expr {
-            Expr::Lit(lit, s) => match lit{
-                Lit::Int(n) => Ok(Value::Int(-n)),
-                Lit::Bool(n) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool,span: None},span: *span})),
-                },
-	    _ => panic!(),
-	}
-    }
-    fn not(expr: Expr, span: &Span) -> Result<Value, Control>{
-        match expr {
-            Expr::Lit(lit, span) => Ok(!lit),
-	    _ => Err("Cannot not"),
-	}
-    }
-    fn binary(op: &BinOp, expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control> {
-        match op {
-	    BinOp::Add => Self::add(expr1, expr2, span),
-	    BinOp::Sub => Ok(Value::Int(expr1-expr2)),
-	    BinOp::Mul => Ok(Value::Int(expr1*expr2)),
-	    BinOp::Div => Self::div(expr1, expr2, span),
-	    BinOp::Mod => Ok(Value::Int(expr1%expr2)),
-	    BinOp::Eq => Ok(Value::Bool(expr1==expr2)),
-	    BinOp::Ne => Ok(Value::Bool(expr1!=expr2)),
-	    BinOp::Lt => Ok(Value::Bool(expr1<expr2)),
-	    BinOp::Le => Ok(Value::Bool(expr1<=expr2)),
-	    BinOp::Gt => Ok(Value::Bool(expr1>expr2)),
-	    BinOp::Ge => Ok(Value::Bool(expr1>=expr2)),
-	    BinOp::And => Ok(Value::Bool(expr1&&expr2)),
-	    BinOp::Or => Ok(Value::Bool(expr1||expr2)),
-	    BinOp::Concat => Ok(Value::List(expr1+expr2)),
-	    BinOp::Cons => Ok(Value::List(expr1+expr2)),
-	}
-    }
-    fn add(expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
-        match (expr1, expr2){
-	    (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) => Ok(Value::Int(lit1 + lit2)),
-	    (Expr::Lit(l, s), _) => Err(Control::Raise(RuntimeError::TypeError(Expr::Lit, expr2, span))),
+    fn unary(op: UnOp, expr: Box<Expr>, span: Span) -> Result<Value, Control> {
+        Ok(match op {
+            UnOp::Neg  => Value::Int(-expr),
+            UnOp::Not => Value::Bool(!expr),
         }
     }
-    fn div(expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
-        match (expr1, expr2){
-	    (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) => match lit2{
-	        0 => Err("Div by zero"),
-	        _ => Ok(Value::Int(lit1/lit2)),
-            },
-	    (_, _) => Err("Not Dividable"),
-        }
+    fn binary(op: BinOp, expr1: Box<Expr>, expr2: Box<Expr>, span: Span) -> Result<Value, Control> {
+        Ok(match op {
+            BinOp::Add => Value::Int(expr1 + expr2),
+            BinOp::Sub => Value::Int(expr1 - expr2),
+            BinOp::Mul => Value::Int(expr1 * expr2),
+            BinOp::Div => Value::Int(expr1 + expr2),
+            BinOp::Mod => Value::Int(expr1 + expr2),
+        }        
     }
-    fn tuple(exprs: &Vec<Expr>, span: &Span) -> Result<Value, Control> {
-        Ok(Value::Tuple(exprs))
+    fn tuple(exprs: Vec<Expr>, span: Span) -> Result<Value, Control> {
+        
     }
-    fn list(exprs: &Vec<Expr>, span: &Span) -> Result<Value, Control> {
-        Ok(Value::List(exprs))
+    fn list(exprs: Vec<Expr>, span: Span) -> Result<Value, Control> {
+        
     }
-    fn proj(expr: &Box<Expr>, num: &u32, span: &Span) -> Result<Value, Control> {
-        match num{
-	    n if n < 0 || n > expr.length => Err("index out of bounds"),
-	    _ => Ok(expr.num),
-        }
+    fn proj(expr: Box<Expr>, num: u32, span: Span) -> Result<Value, Control> {
+        
     }
 }
