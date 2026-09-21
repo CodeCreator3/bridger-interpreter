@@ -1,3 +1,4 @@
+
 //! The evaluator — YOUR file.  \[student\]
 //!
 //! [`eval_expr`](Interpreter::eval_expr) turns one [`Expr`] into a [`Value`], or
@@ -34,9 +35,11 @@ use crate::ast::Lit;
 use crate::ast::UnOp;
 use crate::ast::BinOp;
 use crate::ast::Span;
+use crate::interp::value::List;
 use crate::interp::RuntimeError;
 use crate::interp::Ty;
 use crate::interp::TyKind;
+use crate::interp::Rc;
 
 impl Interpreter {
     /// Evaluate `e` in environment `env`.
@@ -101,56 +104,132 @@ impl Interpreter {
         match expr {
             Expr::Lit(lit, s) => match lit{
                 Lit::Int(n) => Ok(Value::Int(-n)),
-                Lit::Bool(n) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool,span: None},span: *span})),
+                Lit::Bool(b) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool,span: None},span: *span})),
+                _ => panic!(),
                 },
 	    _ => panic!(),
 	}
     }
     fn not(expr: Expr, span: &Span) -> Result<Value, Control>{
         match expr {
-            Expr::Lit(lit, span) => Ok(!lit),
-	    _ => Err("Cannot not"),
+            Expr::Lit(lit, s) => match lit{
+                Lit::Bool(b) => Ok(Value::Bool(!b)),
+                Lit::Int(n) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Bool, span: None}, found: Ty{kind: TyKind::Int,span: None},span: *span})),
+                _ => panic!(),
+                },
+	    _ => panic!(),
 	}
     }
     fn binary(op: &BinOp, expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control> {
         match op {
-	    BinOp::Add => Self::add(expr1, expr2, span),
-	    BinOp::Sub => Ok(Value::Int(expr1-expr2)),
-	    BinOp::Mul => Ok(Value::Int(expr1*expr2)),
+	    BinOp::Add => Self::arith(op, expr1, expr2, span),
+	    BinOp::Sub => Self::arith(op, expr1, expr2, span),
+	    BinOp::Mul => Self::arith(op, expr1, expr2, span),
 	    BinOp::Div => Self::div(expr1, expr2, span),
-	    BinOp::Mod => Ok(Value::Int(expr1%expr2)),
-	    BinOp::Eq => Ok(Value::Bool(expr1==expr2)),
-	    BinOp::Ne => Ok(Value::Bool(expr1!=expr2)),
-	    BinOp::Lt => Ok(Value::Bool(expr1<expr2)),
-	    BinOp::Le => Ok(Value::Bool(expr1<=expr2)),
-	    BinOp::Gt => Ok(Value::Bool(expr1>expr2)),
-	    BinOp::Ge => Ok(Value::Bool(expr1>=expr2)),
-	    BinOp::And => Ok(Value::Bool(expr1&&expr2)),
-	    BinOp::Or => Ok(Value::Bool(expr1||expr2)),
-	    BinOp::Concat => Ok(Value::List(expr1+expr2)),
-	    BinOp::Cons => Ok(Value::List(expr1+expr2)),
+	    BinOp::Mod => Self::arith(op, expr1, expr2, span),
+	    BinOp::Eq => Self::comp(op, expr1, expr2, span),
+	    BinOp::Ne => Self::comp(op, expr1, expr2, span),
+	    BinOp::Lt => Self::comp(op, expr1, expr2, span),
+	    BinOp::Le => Self::comp(op, expr1, expr2, span),
+	    BinOp::Gt => Self::comp(op, expr1, expr2, span),
+	    BinOp::Ge => Self::comp(op, expr1, expr2, span),
+	    BinOp::And => Self::comp(op, expr1, expr2, span),
+	    BinOp::Or => Self::comp(op, expr1, expr2, span),
+	    BinOp::Concat => Self::concat(expr1, expr2, span),
+	    BinOp::Cons => Self::cons(expr1, expr2, span),
 	}
     }
-    fn add(expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
-        match (expr1, expr2){
-	    (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) => Ok(Value::Int(lit1 + lit2)),
-	    (Expr::Lit(l, s), _) => Err(Control::Raise(RuntimeError::TypeError(Expr::Lit, expr2, span))),
+    fn arith(op: &BinOp, expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
+        match (**expr1, **expr2){
+	    (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) => 
+                match (lit1, lit2){
+                    (Lit::Int(n1), Lit::Int(n2)) => 
+                        Ok(match *op{
+                            BinOp::Add => Value::Int(n1 + n2),
+                            BinOp::Sub => Value::Int(n1 - n2),
+                            BinOp::Mul => Value::Int(n1 * n2),
+                        }),
+                    (Lit::Int(n1), Lit::Bool(b2)) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool, span: None}, span: *span})),
+                    (Lit::Bool(b1), Lit::Int(n2)) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool, span: None}, span: *span})),
+                    (Lit::Bool(b1), Lit::Bool(b2)) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool, span: None}, span: *span})),
+                    (_, _) => panic!(), 
+                }
+	    (_, _) => panic!(),
         }
     }
     fn div(expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
-        match (expr1, expr2){
-	    (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) => match lit2{
-	        0 => Err("Div by zero"),
-	        _ => Ok(Value::Int(lit1/lit2)),
-            },
-	    (_, _) => Err("Not Dividable"),
+        match (**expr1, **expr2){
+	    (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) => 
+                match (lit1, lit2){
+                    (Lit::Int(n1), Lit::Int(n2)) =>
+                        match n2{
+	                    0 => Err(Control::Raise(RuntimeError::DivByZero{span: *span})),
+	                    _ => Ok(Value::Int(n1/n2)),
+                        }
+                    (Lit::Int(n1), Lit::Bool(b2)) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool, span: None}, span: *span})),
+                    (Lit::Bool(b1), Lit::Int(n2)) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool, span: None}, span: *span})),
+                    (Lit::Bool(b1), Lit::Bool(b2)) => Err(Control::Raise(RuntimeError::TypeError{expected: Ty{kind: TyKind::Int, span: None}, found: Ty{kind: TyKind::Bool, span: None}, span: *span})),                  
+                    (_, _) => panic!(),  
+                },
+	    (_, _) => panic!(),
         }
     }
+    fn comp(op: &BinOp, expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
+        match (**expr1, **expr2){
+            (Expr::Lit(lit1, span1), Expr::Lit(lit2, span2)) =>
+                match(lit1, lit2){
+                    (Lit::Int(n1), Lit::Int(n2)) => 
+                        match *op{
+                            BinOp::Eq => Ok(Value::Bool(n1==n2)),
+                            BinOp::Ne => Ok(Value::Bool(n1!=n2)),
+                            BinOp::Lt => Ok(Value::Bool(n1<n2)),
+                            BinOp::Le => Ok(Value::Bool(n1<=n2)),
+                            BinOp::Gt => Ok(Value::Bool(n1>n2)),
+                            BinOp::Ge => Ok(Value::Bool(n1>=n2)),
+                        },
+                    (Lit::Bool(b1), Lit::Bool(b2)) => 
+                        match *op{
+                            BinOp::And => Ok(Value::Bool(b1&&b2)),
+                            BinOp::Or => Ok(Value::Bool(b1||b2)), 
+                        },
+                    (_, _) => panic!(),
+                }
+            (_, _) => panic!(),
+        }
+    }
+    fn cons(expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
+        match(**expr1, **expr2){
+            (Expr::List(vec, span1), Expr::Lit(lit, span2)) => {
+		let list_val = Self::list(&vec, &span)?;
+    		let Value::List(list) = list_val else {
+		    panic!()
+		};
+		match lit{
+         	    Lit::Int(int) => Ok(Value::List(List::cons(Value::Int(int), list))),
+         	    Lit::Bool(bool) => Ok(Value::List(List::cons(Value::Bool(bool), list))),
+		    _ => panic!(),
+		}
+		},
+	    (_, _) => panic!(),
+        }
+    }
+    fn concat(expr1: &Box<Expr>, expr2: &Box<Expr>, span: &Span) -> Result<Value, Control>{
+        match(**expr1, **expr2){
+	    (Expr::List(vec1, span1), Expr::List(vec2, span2)) => {
+	        let Value::List(list1) = Self::list(&vec1, &span1)? else {panic!()};
+	        let Value::List(list2) = Self::list(&vec2, &span2)? else {panic!()};
+		Ok(Value::List(list1.concat(&list2)))
+	    },
+	    (_, _) => panic!(),
+	}
+    }
     fn tuple(exprs: &Vec<Expr>, span: &Span) -> Result<Value, Control> {
-        Ok(Value::Tuple(exprs))
+        Ok(Value::Tuple(Rc::new(*exprs)))
     }
     fn list(exprs: &Vec<Expr>, span: &Span) -> Result<Value, Control> {
-        Ok(Value::List(exprs))
+        let list = List::nil;
+        for e in *exprs {list.concat(e);}
+        Ok(Value::List(list))
     }
     fn proj(expr: &Box<Expr>, num: &u32, span: &Span) -> Result<Value, Control> {
         match num{
