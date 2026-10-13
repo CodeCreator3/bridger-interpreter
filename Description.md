@@ -1,57 +1,41 @@
 ## Concept questions
 A few sentences each, in your own words. These are about the code you wrote — point at your own implementation where a question asks you to, rather than repeating the textbook's answers.
 
-**What does it mean for an expression to be stuck, as opposed to evaluating to a value?**
-That means there is no way for the program to continue. In practice it means that the premise of an expression isn't met. In my code that is when the match statement checks the premise and returns an error value if the premise is not met.
+**Your eval_expr returns Result<Value, Control>, and a return travels as Err(Control::Return(v)) — the same Err side an error uses. In your Expr::Return arm, how do you build that value, and why carry a return as an Err rather than an ordinary Value? How do the two channels — Control::Return and Control::Raise — stay distinct, and what catches Control::Return at this milestone?**
+I built the `Err::Return` value by calling `Err(Control::Value(v))`. This is necessary so that the value is brought straight to the caller without executing the rest of the code, just like an actual error would be. `Return` and `Raise` are different enums of the Control type, this distinction can be detected later. However, in this milestone there is no function to catch return.
 
-**Explain in terms of your method's return type: what does eval_expr return in each case (the Ok/Err shape), and for a stuck expression, which RuntimeError variant and expected/found types does it carry?**
-
-Note: there are some cases that aren't covered currently by my program. Those are currently filled in by panic!().
-- E-Lit: currently no Err returned. Only returns Ok(whatever literal is being returned)
-- Unary: if the op is neg, checks that the expr is an int and returns a type error if not. if the op is not, checks that the expr is a bool and returns type error if not. If types match their operation, an ok result is outputted
-- Binary: checks types (for +,-,*,/,%,>=,<=,<,> makes sure it is int, for &&,|| makes sure it is bool; will return type error if not), for / and % makes sure divisor is !=0 (will return div by 0 error if not)
-- Tuple: simply creates a vec, pushes values to it, then converts to tuple. No errors currently being returned.
-- List: simply creates a list and pushes values to it. No errors currently being returned.
-- Proj: will raise no such field if the index is out of bounds or the expr that should be a tuple is not a tuple.
-
-**Walk through how the ? operator behaves in one of your arms: when you write self.eval_expr(sub, env)?, what happens if that subexpression is stuck, and what does it save you from writing by hand? What would the same arm look like without ??**
-
-The ? operator is syntactic sugar for returning the Value if the Result<Value, Control> is a value and Err if not.
-If the subexpression is stuck, it will return an Err.
-It would look something like this (Pseudocode):
-```rust
-match result{
-    Value(v) => v,
-    Err(e) => e,
-}
+**Walk through your assignment arm e1 := e2: in what order do you evaluate the two sides, which one must be a Value::Ref(loc), which self.store operation you call, and what value the form returns. For the stuck case — assigning to something that is not a reference — name the RuntimeError variant you build and how you form the expected type.**
+I evaluate the left side first to make sure it is a Ref value (pointer). Then I evaluate the second expression and write it to the store a that location. `e1` must be `Value::Ref(loc)`. The `self.store` operation I call is `write`. The form returns `Value::Unit`. The `RuntimeError` is `TypeError`. I form the expected type using this:
+```Rust
+expected: Ty {
+                    kind: TyKind::Ref(Rc::new(Ty {
+                        kind: TyKind::Int,
+                        span: None,
+                    })),
+                    span: None,
+                }
 ```
+Note that the inner type of the expected Ref is Int, because it is actually ambiguous and their's no way to set TyKind to ambiguous (so I am limited by the TyKind enum).
 
-**In your and/or implementation, how do you avoid evaluating the right operand once the left operand has already decided the answer? Point to the lines that do it, name the Rust control flow you used, and say why you could not evaluate both operands first and then combine them.**
-That is called short-circuiting. In line 252 of eval.rs (inside my logical_op function), we check if the left expression is a bool. Then if the op is an or and the left side is true, we return true without even evaluating the right side. If the op is an and and the left side is false, we return false without evaluating the right side. I could not evaluate both operands first because this would ignore the short-circuiting rule that we have for bridger.
+**The Mutation chapter's rules thread a store in and a store out, yet your interpreter keeps one self.store and mutates it in place. Explain, using let a = ref 1; let b = a; b := 9; deref a ⇒ 9, why aliasing works: what ref allocated, what b = a copied, and why writing through b is visible through a.**
+ref allocated `a` as a reference to `1`. `b = a` copied that reference to `b`. Writing through `b` is visible to `a` because they both point to the same location that can be updated via either pointer.
 
-**Why does your integer arithmetic wrap rather than overflow-panic, and which specific operations (or method calls) in your code produce that behavior?**
-To prevent overflow panic, I used Rust's built in wrapping functions. (wrapping_add, wrapping_sub, wrapping_mul, wrapping_div, wrapping_rem)
+**Your while arm is a host loop and your for arm walks a list. For each, say what value the body produces and what you do with it, what the loop as a whole evaluates to, and — for for — how env.extend(x, item) gives the loop variable a fresh binding each turn. Then explain how a return inside either body escapes the loop, referring to the ? in your arm.**
+The body of while produces a boolean each loop and if the boolean is true, I continue the loop, if not, I exit the loop and return Unit (meaning the loop will eventually return Unit provided it isn't an infinite loop). The body of for binds that element of the list to the provided name before running the main for loop expression with that new environment, once the loop has finished, it returns Unit. For gives a fresh binding each turn because each loop, it takes the current environment and does the binding, assigning the output of that binding as a new environment. That new environment is only scoped for that iteration for the Rust for loop, so on the next iteration, a new environment will be created. When evaluating the expression inside the for loop, I use the ? operator, which will return out of the Rust for loop early if it spots an `Err` value. 
 
-**When your code reports a stuck expression, which node's span does the error carry, and how does your code get that span? Why is blaming that node more useful to a user than blaming, say, the whole expression?**
-When my code reports a stuck expression, it carries the span from the caller. It gets that span as a parameter. This is useful because it tells the user where the error came from.
+**In if 3 { 1 } else { 2 } the condition is not a Bool, and the program is stuck. Walk through how your Expr::If arm produces that, and contrast it with if false { 9 }, which is not stuck. Which branches does your arm evaluate in each case, and what does an else-less if return when its condition is false?**
+The Expr::If evaluates the condition first (the 3 in this case), and checks if that is a bool using a match statement. Therefore, if it is an int, it will output a `TypeError`. `if false { 9 }` isn't stuck because the condition is a bool, which matches the premise of the evaluation. In the first case, the arm evaluates neither the `{1}` nor the `{2}` because the condition wasn't a bool. In the second case, it doesn't eval the `{9}` becasue the condition is false. Instead it checks for a right side, and because there is none, it returns `Unit`. An else-less if retuns a `Unit` if its condition is false.
 
 ## How you implemented it
-
-**Walk through your Expr::Binary arm: how do you evaluate the operands, dispatch on the BinOp, build the result value, and report a type error? Naming the provided tools you used (self.eval_expr, type_of, the wrapping operations, RuntimeError, .into()/?) is encouraged.**
-For the binary arm, I first check the operation. I have one for arithmatic (+-*), one for division and modulo, one for logical operators, one for comparison, one for concat, and one for cons.
-In each case, I evaluate the expressions, I check that the type matches the operation by putting the operands through a match statement and returning a type error in the case of an incorrect type.
-Once I have the correct type, I unpack the value, do the operation, and construct the output Value.
-
-Tools I used:
-
-- rust arithmetic wrapping functions
-- panic!() (in cases where I haven't implemented all possibilities)
-- into (when concatinating strings, I used into to pack the new string into an Rc)
-- Runtime Errors (I used type errors for incorrect types and div by 0 errors for division and modulo where divisor by 0)
-- reference and deref
-- type_of (allows me to report an incorrect type without having to enumerate each possible incorrect type in my match statements)
+**Walk through one of your loop arms (Expr::While or Expr::For): how you destructure it, how you re-evaluate the condition or iterate the list, where you take the body's value with ? and drop it, and how you produce Value::Unit. Then describe the two new cases you added inside Expr::Unary for UnOp::Ref and UnOp::Deref. Naming the provided tools you used (self.eval_expr, self.store.alloc/read/write, env.extend, RuntimeError, Ty::reference, .into()/?) is encouraged.**
+For `Expr::While`, I start by checking that the condition is a bool. If so, I start a Rust while loop based on that condition, if not, I return a type error. After entering the loop (based on the condition), I run the body expression of the while loop, then re-evaluate the condition of the while loop (using `self.eval_expr`) and reassign the boolean that the loop is running on to the result of the re-evaluation. I also double check that the condition is still a bool just in case; if it isn't, I return a TypeError. I put `?` after my body evaluation to push an Err out if one arises. I produce Value::Unit simply by outputting that after the while loop. For `UnOp::Ref`, I call `store.alloc` on the value I get from the expression. For `UnOp::Deref`, I check that the expression evals to a `TyKind::Ref`. If not, I return a `TypeError`. If it is, I call `store.read` on that location and output the result of that.
+Provided tools I used:
+- self.eval_expr
+- self.store.alloc
+- self.store.read
+- self.store.write
+- env.extend
+- RuntimeError::TypeError
 
 **Point out anything that was tricky, a bug you fixed, or a design choice you made — and if you used an assistant, say what you had it do and how you checked its work.**
-
-One thing that was tricky was taking every type incompatibility into account, especially for binary operations. There were so many combinations of incorrect types that had to be accounted for that it became exhausting writing each one out for each function. After some investigation, I realized I could use type_of to handle all incorrect types at once, which cut down on a lot of code and complexity.
-I used Microsoft Copilot to give me suggestions about how to handle certain situations. For example, I asked it how to do wrapping arithmetic operations in rust. It told me the functions to use, I implemented them and tested the code (cargo m1) to make sure it worked.
+One thing that was tricky was figuring out how to start a Rust while loop with a boolean and then update that same boolean every loop of the while loop. It required re-evaluating the expression and double checking it was a Bool. I did not use an assistant.

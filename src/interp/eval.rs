@@ -36,6 +36,7 @@ use crate::ast::Span;
 use crate::ast::Stmt;
 use crate::ast::UnOp;
 use crate::interp::value::List;
+use crate::interp::Name;
 use crate::interp::RuntimeError;
 use crate::interp::Ty;
 use crate::interp::TyKind;
@@ -58,11 +59,11 @@ impl Interpreter {
             Expr::Block(vec, option, span) => self.block(vec, option, span, env),
 
             // ---- M3: state & control ----
-            Expr::If(..) => todo_m3!("E-If"),
-            Expr::While(..) => todo_m3!("E-While"),
-            Expr::For(..) => todo_m3!("E-For"),
-            Expr::Assign(..) => todo_m3!("E-Assign"),
-            Expr::Return(..) => todo_m3!("E-Return"),
+            Expr::If(expr1, expr2, expr3, span) => self.if_eval(expr1, expr2, expr3, span, env),
+            Expr::While(expr1, expr2, span) => self.while_eval(expr1, expr2, span, env),
+            Expr::For(name, expr1, expr2, span) => self.for_eval(name, expr1, expr2, span, env),
+            Expr::Assign(expr1, expr2, span) => self.assign(expr1, expr2, span, env),
+            Expr::Return(expr, span) => self.return_eval(expr, span, env),
 
             // ---- M4: functions ----
             Expr::Lambda(..) => todo_m4!("E-Lam"),
@@ -95,7 +96,8 @@ impl Interpreter {
         match op {
             UnOp::Neg => self.neg(expr, span, env),
             UnOp::Not => self.not(expr, span, env),
-            _ => panic!(),
+            UnOp::Deref => self.deref(expr, span, env),
+            UnOp::Ref => self.refer(expr, span, env),
         }
     }
     fn neg(&mut self, expr: &Expr, span: &Span, env: &Env) -> Result<Value, Control> {
@@ -116,19 +118,36 @@ impl Interpreter {
         let val = self.eval_expr(expr, env)?;
         match val {
             Value::Bool(b) => Ok(Value::Bool(!b)),
-            Value::Int(_n) => Err(Control::Raise(RuntimeError::TypeError {
+            val => Err(Control::Raise(RuntimeError::TypeError {
                 expected: Ty {
                     kind: TyKind::Bool,
                     span: None,
                 },
-                found: Ty {
-                    kind: TyKind::Int,
-                    span: None,
-                },
+                found: type_of(&val),
                 span: *span,
             })),
-            _ => panic!(),
         }
+    }
+    fn deref(&mut self, expr: &Expr, span: &Span, env: &Env) -> Result<Value, Control> {
+        let val = self.eval_expr(expr, env)?;
+        match val {
+            Value::Ref(loc) => Ok(self.store.read(loc)),
+            val => Err(Control::Raise(RuntimeError::TypeError {
+                expected: Ty {
+                    kind: TyKind::Ref(Rc::new(Ty {
+                        kind: TyKind::Int,
+                        span: None,
+                    })),
+                    span: None,
+                },
+                found: type_of(&val),
+                span: *span,
+            })),
+        }
+    }
+    fn refer(&mut self, expr: &Expr, _span: &Span, env: &Env) -> Result<Value, Control> {
+        let val = self.eval_expr(expr, env)?;
+        Ok(Value::Ref(self.store.alloc(val)))
     }
     fn binary(
         &mut self,
@@ -343,19 +362,11 @@ impl Interpreter {
                     })),
                     span: None,
                 },
-                found: Ty {
-                    kind: TyKind::Int,
-                    span: None,
-                },
+                found: type_of(&tail_val),
                 span: *span,
             }));
         };
-        match val1 {
-            Value::Int(int) => Ok(Value::List(List::cons(Value::Int(int), tail_list))),
-            Value::Bool(bool) => Ok(Value::List(List::cons(Value::Bool(bool), tail_list))),
-            Value::Str(str) => Ok(Value::List(List::cons(Value::Str(str.clone()), tail_list))),
-            _ => panic!(),
-        }
+        Ok(Value::List(List::cons(val1, tail_list)))
     }
     fn concat(
         &mut self,
@@ -366,23 +377,33 @@ impl Interpreter {
     ) -> Result<Value, Control> {
         let val1 = self.eval_expr(expr1, env)?;
         let val2 = self.eval_expr(expr2, env)?;
-        match (val1, val2) {
+        match (val1.clone(), val2.clone()) {
             (Value::List(list1), Value::List(list2)) => Ok(Value::List(list1.concat(&list2))),
             (Value::Str(s1), Value::Str(s2)) => Ok(Value::Str(format!("{s1}{s2}").into())),
-            (_, _) => Err(Control::Raise(RuntimeError::TypeError {
-                expected: Ty {
-                    kind: TyKind::List(Rc::new(Ty {
-                        kind: TyKind::Int,
-                        span: None,
-                    })),
-                    span: None,
-                },
-                found: Ty {
-                    kind: TyKind::Int,
-                    span: None,
-                },
-                span: *span,
-            })),
+            (_, _) => {
+                let offender = if matches!(val1, Value::List(_)) || matches!(val1, Value::Str(_)) {
+                    &val2
+                } else {
+                    &val1
+                };
+
+                let nonoffendor =
+                    if (matches!(val1, Value::List(_)) || matches!(val1, Value::Str(_))) {
+                        &val1
+                    } else if (matches!(val2, Value::List(_)) || matches!(val2, Value::Str(_))) {
+                        &val2
+                    } else {
+                        &Value::List(List::nil())
+                    };
+
+                Err(Control::Raise(RuntimeError::TypeError {
+                    expected: type_of(nonoffendor),
+
+                    found: type_of(offender),
+
+                    span: *span,
+                }))
+            }
         }
     }
     fn tuple(&mut self, exprs: &Vec<Expr>, _span: &Span, env: &Env) -> Result<Value, Control> {
@@ -393,12 +414,13 @@ impl Interpreter {
         Ok(Value::Tuple(Rc::from(list)))
     }
     fn list(&mut self, exprs: &[Expr], _span: &Span, env: &Env) -> Result<Value, Control> {
-        let mut list = List::nil();
-        for e in exprs.iter().rev() {
+        let mut overall_list = List::nil();
+        for e in exprs.iter() {
             let val = self.eval_expr(e, env)?;
-            list = List::cons(val, list);
+            let list = List::cons(val, List::nil());
+            overall_list = overall_list.concat(&list);
         }
-        Ok(Value::List(list))
+        Ok(Value::List(overall_list))
     }
     fn proj(&mut self, expr: &Expr, num: &u32, span: &Span, env: &Env) -> Result<Value, Control> {
         let ind = *num as usize;
@@ -419,44 +441,168 @@ impl Interpreter {
             })),
         }
     }
-    fn var(&mut self, name: &String, span: &Span, env: &Env) -> Result<Value, Control> {
-        let result = env.lookup(name);
-        if result.is_none() {
-            Err(Control::Raise(RuntimeError::NoSuchField {
-                field: name.clone(),
+    fn var(&mut self, name: &str, span: &Span, env: &Env) -> Result<Value, Control> {
+        match env.lookup(name) {
+            Some(value) => Ok(value),
+            None => Err(Control::Raise(RuntimeError::UnboundVariable {
+                name: name.to_owned(),
                 span: *span,
-            }))
-        } else {
-            Ok(result.unwrap())
+            })),
         }
     }
     fn block(
         &mut self,
         vec: &Vec<Stmt>,
-        _option: &Option<Box<Expr>>,
+        option: &Option<Box<Expr>>,
         _span: &Span,
         env: &Env,
     ) -> Result<Value, Control> {
-        let mut output = Ok(Value::Unit);
+        let mut env = env.clone();
+
         for stmt in vec {
-            output = match stmt {
-                Stmt::Let(name, option, expr, span) => self.e_let(name, option, expr, span, env),
-                Stmt::Expr(expr) => self.eval_expr(&expr, env),
+            match stmt {
+                Stmt::Let(name, _option, expr, _span) => {
+                    let value = self.eval_expr(expr, &env)?;
+                    env = env.extend(name.clone(), value);
+                }
+                Stmt::Expr(expr) => {
+                    self.eval_expr(expr, &env)?;
+                }
             }
         }
-        output
-    }
 
-    fn e_let(
+        match option {
+            Some(expr) => self.eval_expr(expr, &env),
+            None => Ok(Value::Unit),
+        }
+    }
+    fn if_eval(
         &mut self,
-        name: &String,
-        _option: &Option<Ty>,
-        expr: &Expr,
-        _span: &Span,
+        expr1: &Expr,
+        expr2: &Expr,
+        expr3: &Option<Box<Expr>>,
+        span: &Span,
         env: &Env,
     ) -> Result<Value, Control> {
-        let value = self.eval_expr(&expr, env)?;
-        env.extend(name.clone(), value);
-        Ok(Value::Unit)
+        let val1 = self.eval_expr(expr1, env)?;
+        match val1 {
+            Value::Bool(true) => self.eval_expr(expr2, env),
+            Value::Bool(false) => match expr3 {
+                Option::Some(expr3_unwrapped) => self.eval_expr(expr3_unwrapped, env),
+                Option::None => Ok(Value::Unit),
+            },
+            _ => Err(Control::Raise(RuntimeError::TypeError {
+                expected: Ty {
+                    kind: TyKind::Bool,
+                    span: None,
+                },
+                found: type_of(&val1),
+                span: *span,
+            })),
+        }
+    }
+
+    fn while_eval(
+        &mut self,
+        expr1: &Expr,
+        expr2: &Expr,
+        span: &Span,
+        env: &Env,
+    ) -> Result<Value, Control> {
+        let mut val1 = self.eval_expr(expr1, env)?;
+        match val1 {
+            Value::Bool(mut b) => {
+                while b {
+                    self.eval_expr(expr2, env)?;
+                    val1 = self.eval_expr(expr1, env)?;
+                    b = match val1 {
+                        Value::Bool(b) => b,
+                        _ => {
+                            return Err(Control::Raise(RuntimeError::TypeError {
+                                expected: Ty {
+                                    kind: TyKind::Bool,
+                                    span: None,
+                                },
+                                found: type_of(&val1),
+                                span: *span,
+                            }))
+                        }
+                    }
+                }
+                Ok(Value::Unit)
+            }
+            _ => Err(Control::Raise(RuntimeError::TypeError {
+                expected: Ty {
+                    kind: TyKind::Bool,
+                    span: None,
+                },
+                found: type_of(&val1),
+                span: *span,
+            })),
+        }
+    }
+
+    fn for_eval(
+        &mut self,
+        name: &Name,
+        expr1: &Expr,
+        expr2: &Expr,
+        span: &Span,
+        env: &Env,
+    ) -> Result<Value, Control> {
+        let val1 = self.eval_expr(expr1, env)?;
+        match val1 {
+            Value::List(list) => {
+                for element in &list {
+                    let new_env = env.extend(name.clone(), element.clone());
+                    self.eval_expr(expr2, &new_env)?;
+                }
+                Ok(Value::Unit)
+            }
+            _ => Err(Control::Raise(RuntimeError::TypeError {
+                expected: Ty {
+                    kind: TyKind::List(Rc::new(Ty {
+                        kind: TyKind::Int,
+                        span: None,
+                    })),
+                    span: None,
+                },
+                found: type_of(&val1),
+                span: *span,
+            })),
+        }
+    }
+
+    fn assign(
+        &mut self,
+        expr1: &Expr,
+        expr2: &Expr,
+        span: &Span,
+        env: &Env,
+    ) -> Result<Value, Control> {
+        let val1 = self.eval_expr(expr1, env)?;
+        match val1 {
+            Value::Ref(loc) => {
+                let val2 = self.eval_expr(expr2, env)?;
+                self.store.write(loc, val2);
+                Ok(Value::Unit)
+            }
+            _ => Err(Control::Raise(RuntimeError::TypeError {
+                expected: Ty {
+                    kind: TyKind::Ref(Rc::new(Ty {
+                        kind: TyKind::Int,
+                        span: None,
+                    })),
+                    span: None,
+                },
+                found: type_of(&val1),
+                span: *span,
+            })),
+        }
+    }
+
+    fn return_eval(&mut self, expr: &Expr, _span: &Span, env: &Env) -> Result<Value, Control> {
+        let val1 = self.eval_expr(expr, env)?;
+        Err(Control::Return(val1))
     }
 }
