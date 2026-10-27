@@ -31,11 +31,13 @@ use super::Interpreter;
 use super::{Control, Env, Value};
 use crate::ast::BinOp;
 use crate::ast::Expr;
+use crate::ast::LambdaParam;
 use crate::ast::Lit;
 use crate::ast::Span;
 use crate::ast::Stmt;
 use crate::ast::UnOp;
-use crate::interp::value::List;
+use crate::interp::value::{uncomparable, List};
+use crate::interp::Closure;
 use crate::interp::Name;
 use crate::interp::RuntimeError;
 use crate::interp::Ty;
@@ -66,8 +68,8 @@ impl Interpreter {
             Expr::Return(expr, span) => self.return_eval(expr, span, env),
 
             // ---- M4: functions ----
-            Expr::Lambda(..) => todo_m4!("E-Lam"),
-            Expr::Call(..) => todo_m4!("E-App (dispatch Bridger vs. Native closure)"),
+            Expr::Lambda(params, body, span) => self.lambda(params, body, span, env),
+            Expr::Call(operator, args, span) => self.call(operator, args, span, env),
 
             // ---- M6: relations (queries go through `self.solutions`, engine.rs) ----
             Expr::Relation(..) => todo_m6!("E-Add / E-Clear / E-Solutions / E-Query"),
@@ -320,28 +322,40 @@ impl Interpreter {
                 BinOp::Ge => Ok(Value::Bool(n1 >= n2)),
                 _ => panic!(),
             },
-            (val1, val2) => match *op {
-                BinOp::Eq => Ok(Value::Bool(val1 == val2)),
-                BinOp::Ne => Ok(Value::Bool(val1 != val2)),
-                _ => {
-                    let offender = if matches!(val1, Value::Int(_)) {
-                        &val2
-                    } else {
-                        &val1
-                    };
-
-                    Err(Control::Raise(RuntimeError::TypeError {
-                        expected: Ty {
-                            kind: TyKind::Int,
-                            span: None,
-                        },
-
-                        found: type_of(offender),
-
-                        span: *span,
-                    }))
+            (val1, val2) => {
+                let mut uncomp = uncomparable(&val1);
+                if uncomp.is_none() {
+                    uncomp = uncomparable(&val2);
                 }
-            },
+                if let Some(found) = uncomp {
+                    return Err(Control::Raise(RuntimeError::NotComparable {
+                        found,
+                        span: *span,
+                    }));
+                }
+                match *op {
+                    BinOp::Eq => Ok(Value::Bool(val1 == val2)),
+                    BinOp::Ne => Ok(Value::Bool(val1 != val2)),
+                    _ => {
+                        let offender = if matches!(val1, Value::Int(_)) {
+                            &val2
+                        } else {
+                            &val1
+                        };
+
+                        Err(Control::Raise(RuntimeError::TypeError {
+                            expected: Ty {
+                                kind: TyKind::Int,
+                                span: None,
+                            },
+
+                            found: type_of(offender),
+
+                            span: *span,
+                        }))
+                    }
+                }
+            }
         }
     }
     fn cons(
@@ -604,5 +618,80 @@ impl Interpreter {
     fn return_eval(&mut self, expr: &Expr, _span: &Span, env: &Env) -> Result<Value, Control> {
         let val1 = self.eval_expr(expr, env)?;
         Err(Control::Return(val1))
+    }
+
+    fn lambda(
+        &mut self,
+        params: &Vec<LambdaParam>,
+        body: &Expr,
+        _span: &Span,
+        env: &Env,
+    ) -> Result<Value, Control> {
+        Ok(Value::Closure(Rc::new(Closure::Bridger {
+            params: (*params)
+                .iter()
+                .map(|l| l.name.clone())
+                .collect::<Vec<String>>(),
+            body: body.clone(),
+            env: env.clone(),
+        })))
+    }
+
+    fn call(
+        &mut self,
+        operator: &Expr,
+        args: &Vec<Expr>,
+        span: &Span,
+        env: &Env,
+    ) -> Result<Value, Control> {
+        self.enter_call(*span)?;
+        let operator_val = self.eval_expr(operator, env)?;
+        let mut result;
+        match operator_val {
+            Value::Closure(c) => {
+                let mut args_vals = Vec::new();
+                for arg in args {
+                    args_vals.push(self.eval_expr(arg, env)?);
+                }
+                match c.as_ref() {
+                    Closure::Native(id) => result = Ok(self.eval_prelude(*id, args_vals, *span)?),
+                    Closure::Bridger {
+                        params,
+                        body,
+                        env: closure_env,
+                    } => {
+                        if params.len() == args_vals.len() {
+                            let mut new_closure_env = closure_env.clone();
+                            for (param, arg) in params.iter().zip(args_vals.iter()) {
+                                new_closure_env =
+                                    new_closure_env.extend(param.clone(), arg.clone());
+                            }
+                            result = self.eval_expr(body, &new_closure_env);
+                        } else {
+                            result = Err(Control::Raise(RuntimeError::ArityMismatch {
+                                expected: params.len(),
+                                found: args.len(),
+                                span: *span,
+                            }))
+                        }
+                    }
+                }
+            }
+            found => {
+                result = Err(Control::Raise(RuntimeError::NotAFunction {
+                    found: type_of(&found),
+                    span: *span,
+                }))
+            }
+        };
+        result = match result {
+            Result::Err(v) => match v {
+                Control::Return(val) => Ok(val),
+                _ => Err(v),
+            },
+            val => val,
+        };
+        self.leave_call();
+        result
     }
 }

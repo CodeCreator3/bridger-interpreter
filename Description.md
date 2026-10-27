@@ -1,41 +1,56 @@
 ## Concept questions
 A few sentences each, in your own words. These are about the code you wrote — point at your own implementation where a question asks you to, rather than repeating the textbook's answers.
 
-**Your eval_expr returns Result<Value, Control>, and a return travels as Err(Control::Return(v)) — the same Err side an error uses. In your Expr::Return arm, how do you build that value, and why carry a return as an Err rather than an ordinary Value? How do the two channels — Control::Return and Control::Raise — stay distinct, and what catches Control::Return at this milestone?**
-I built the `Err::Return` value by calling `Err(Control::Value(v))`. This is necessary so that the value is brought straight to the caller without executing the rest of the code, just like an actual error would be. `Return` and `Raise` are different enums of the Control type, this distinction can be detected later. However, in this milestone there is no function to catch return.
+**In { let y = 1; let f = |x| x + y; let y = 100; f(0) } the result is 1, not 101. Walk through what your Expr::Lambda arm stores in the closure, which environment your Expr::Call arm extends with the parameter x, and why that gives 1. What would the result be if your Call arm extended the caller's environment instead, and what is the name for the scoping discipline your interpreter implements?**
 
-**Walk through your assignment arm e1 := e2: in what order do you evaluate the two sides, which one must be a Value::Ref(loc), which self.store operation you call, and what value the form returns. For the stuck case — assigning to something that is not a reference — name the RuntimeError variant you build and how you form the expected type.**
-I evaluate the left side first to make sure it is a Ref value (pointer). Then I evaluate the second expression and write it to the store a that location. `e1` must be `Value::Ref(loc)`. The `self.store` operation I call is `write`. The form returns `Value::Unit`. The `RuntimeError` is `TypeError`. I form the expected type using this:
-```Rust
-expected: Ty {
-                    kind: TyKind::Ref(Rc::new(Ty {
-                        kind: TyKind::Int,
-                        span: None,
-                    })),
-                    span: None,
-                }
-```
-Note that the inner type of the expected Ref is Int, because it is actually ambiguous and their's no way to set TyKind to ambiguous (so I am limited by the TyKind enum).
+The Lambda arm stores the current environment in the closure for use when called. The call arm extends the closure's stored environment with the parameter x. That gives 1 because the closure env was stored when the lambda was created and the outer env had y=1. If call extended the callers environment, the result would be 100 (0+100). The scoping discipline is lexical scoping.
 
-**The Mutation chapter's rules thread a store in and a store out, yet your interpreter keeps one self.store and mutates it in place. Explain, using let a = ref 1; let b = a; b := 9; deref a ⇒ 9, why aliasing works: what ref allocated, what b = a copied, and why writing through b is visible through a.**
-ref allocated `a` as a reference to `1`. `b = a` copied that reference to `b`. Writing through `b` is visible to `a` because they both point to the same location that can be updated via either pointer.
+**Your Call arm evaluates the operator, the arguments, and checks the arity, in some order. Say the order your code uses, and use it to explain why 5(print(1)) is stuck with NotAFunction without printing anything, while (|x, y| 0)(print(1)) prints 1 and then is stuck with ArityMismatch. Which span do both errors carry?**
 
-**Your while arm is a host loop and your for arm walks a list. For each, say what value the body produces and what you do with it, what the loop as a whole evaluates to, and — for for — how env.extend(x, item) gives the loop variable a fresh binding each turn. Then explain how a return inside either body escapes the loop, referring to the ? in your arm.**
-The body of while produces a boolean each loop and if the boolean is true, I continue the loop, if not, I exit the loop and return Unit (meaning the loop will eventually return Unit provided it isn't an infinite loop). The body of for binds that element of the list to the provided name before running the main for loop expression with that new environment, once the loop has finished, it returns Unit. For gives a fresh binding each turn because each loop, it takes the current environment and does the binding, assigning the output of that binding as a new environment. That new environment is only scoped for that iteration for the Rust for loop, so on the next iteration, a new environment will be created. When evaluating the expression inside the for loop, I use the ? operator, which will return out of the Rust for loop early if it spots an `Err` value. 
+First, it evaluates the operator, then it evaluates the arguments, then it checks the arity, 5(print(1)) would be stuck before reaching the argument because my code checks that the operator is a function before evaluating the arguments. (|x, y| 0)(print(1)) gets a valid operator, then evaluates the arguments (printing 1), then checks the arity which is what causes it to be stuck. Both have the span of the caller.
 
-**In if 3 { 1 } else { 2 } the condition is not a Bool, and the program is stuck. Walk through how your Expr::If arm produces that, and contrast it with if false { 9 }, which is not stuck. Which branches does your arm evaluate in each case, and what does an else-less if return when its condition is false?**
-The Expr::If evaluates the condition first (the 3 in this case), and checks if that is a bool using a match statement. Therefore, if it is an int, it will output a `TypeError`. `if false { 9 }` isn't stuck because the condition is a bool, which matches the premise of the evaluation. In the first case, the arm evaluates neither the `{1}` nor the `{2}` because the condition wasn't a bool. In the second case, it doesn't eval the `{9}` becasue the condition is false. Instead it checks for a right side, and because there is none, it returns `Unit`. An else-less if retuns a `Unit` if its condition is false.
+**At M3, nothing you wrote caught Control::Return. Now your Call arm does. Show how your arm turns Err(Control::Return(v)) into the call's value while letting a Control::Raise through, and explain why you must not apply ? to the body's result before calling leave_call. What two things would go wrong if you did?**
+
+My code matches the result of the call code to Result::Err, if it isn't an Err, the Value is passed on. If it is an Err, the control is matched to Return, if it isn't return, the Err is passed on. If it is a Return, the value of the return is converted into a Result::Value and passed on. You don't apply ? to the body's result before leave_call because we want the call arm to output a Result, not a Value and because we don't want to skip the leave_call method (which keeps track of stack depth).
+
+**fold(range(0, 1000000), 0, |a, x| a + x) runs to completion, while the recursive sum_to(1000000) is a StackOverflow, even though both call a Bridger function a million times. Explain the difference in terms of how many calls are in progress at once and what your enter_call/leave_call pair counts. How does fold's callback reach your Call arm at all, given that fold is a native?**
+
+Fold runs like a for loop where each function call is seperate from each other. Recursive calls happen inside of each other so you can end up with many functions running at the same time. Both natives and bridger functions are considered Closures. When an Expr in the AST is a Closure (which happens when the fold function is used), it is sent down the call branch via the overall match function.
+
+**A top-level fn fact can call itself, but let fact = |n| if n == 0 { 1 } else { n * fact(n - 1) }; inside main is stuck with an unbound variable. Using what your Lambda arm captures and what the provided driver does for top-level functions, explain why the two behave differently.**
+
+The lambda arm captures the env before the new binding is bound. The provided driver binds the function to the environment before storing the closure.
 
 ## How you implemented it
-**Walk through one of your loop arms (Expr::While or Expr::For): how you destructure it, how you re-evaluate the condition or iterate the list, where you take the body's value with ? and drop it, and how you produce Value::Unit. Then describe the two new cases you added inside Expr::Unary for UnOp::Ref and UnOp::Deref. Naming the provided tools you used (self.eval_expr, self.store.alloc/read/write, env.extend, RuntimeError, Ty::reference, .into()/?) is encouraged.**
-For `Expr::While`, I start by checking that the condition is a bool. If so, I start a Rust while loop based on that condition, if not, I return a type error. After entering the loop (based on the condition), I run the body expression of the while loop, then re-evaluate the condition of the while loop (using `self.eval_expr`) and reassign the boolean that the loop is running on to the result of the re-evaluation. I also double check that the condition is still a bool just in case; if it isn't, I return a TypeError. I put `?` after my body evaluation to push an Err out if one arises. I produce Value::Unit simply by outputting that after the while loop. For `UnOp::Ref`, I call `store.alloc` on the value I get from the expression. For `UnOp::Deref`, I check that the expression evals to a `TyKind::Ref`. If not, I return a `TypeError`. If it is, I call `store.read` on that location and output the result of that.
-Provided tools I used:
-- self.eval_expr
-- self.store.alloc
-- self.store.read
-- self.store.write
-- env.extend
-- RuntimeError::TypeError
+**Walk through your Expr::Call arm from start to finish: how you destructure it, how you evaluate the operator and arguments, how you dispatch on Closure::Bridger versus Closure::Native, how you build the body's environment, and how you handle the body's result. Then describe your Expr::Lambda arm in a sentence or two. Naming the provided tools you used (self.eval_expr, env.extend, enter_call, leave_call, eval_prelude, type_of, RuntimeError, .into()/?) is encouraged.**
+
+Expr::Call arm:
+1. call enter_call with ? to pass on StackOverflow
+2. evaluate operator to value
+3. create mutable result variable that will be used to store output
+4. check if operator is a closure (if not: NotAFunction)
+5. evaluate arguments
+6. if closure is native, call eval_prelude on args and save result to result variable
+7. if closure is bridger:
+
+{
+
+8. check lengths of param vec and args vec to make sure they match (or else: ArityMismatch)
+9. clone the closure's environment
+10. extend the cloned env with parameters as names and arguments as values
+11. evaluate the body with the new environment (save to result variable)
+
+}
+
+12. if the result variable is a Control::Return, convert to Value and save to result variable
+13. output result variable
+
+**Say what, if anything, you changed in your M1–M3 arms for this milestone — for example, to make == on a function stuck, or to fix an evaluation-order problem a whole-program test exposed — and why.**
+
+I ended up having to call the uncomparable fn on values to check whether they could be compared for == and !=. If not, I return a NotComparable error.
 
 **Point out anything that was tricky, a bug you fixed, or a design choice you made — and if you used an assistant, say what you had it do and how you checked its work.**
-One thing that was tricky was figuring out how to start a Rust while loop with a boolean and then update that same boolean every loop of the while loop. It required re-evaluating the expression and double checking it was a Bool. I did not use an assistant.
+
+One thing that was tricky was trying to match the closure value in call. When I tried to dereference it, Rust got mad because apparently it couldn't move out of an Rc. The solution ended up being using the as_ref fn to get Rust to let me access the closure.
+
+That was one example of where I used an AI assistant to help me get my program working. I checked its work by running the program and confirming I stop getting the "cannot move out of an Rc" error. The other time I used AI for m4 was when the "Operands are evaluated left to right" hidden check was failing upon submission. It turns out that checking for closures in the comparison arm wasn't enough, functions could be hidden in data (like lists and tuples). That is why the AI suggested switching to the uncomparable fn for checking whether datatypes could be comparable.
