@@ -29,7 +29,8 @@
 //! choice is silently lost.
 
 use super::{Checker, Ctx, TyError};
-use crate::ast::{Expr, Rule, Span, Ty};
+use crate::ast::{Expr, Rule, Span, Ty, UnOp, TyKind};
+use crate::interp::{type_of};
 
 impl Checker {
     /// The type of `e` in context `ctx`, checked against `expected` when one
@@ -45,25 +46,41 @@ impl Checker {
         let _ = (ctx, expected);
         match e {
             // ---- M5: the checker over M1–M4's expressions ----
-            Expr::Lit(..) => todo_m5!("T-Int / T-Bool / T-Str / T-Unit"),
-            Expr::Var(..) => todo_m5!("T-Var / T-Self"),
-            Expr::Unary(..) => todo_m5!("T-Neg / T-Not / T-Ref / T-Deref"),
-            Expr::Binary(..) => {
+            Expr::Lit(lit, span) => Ok(type_of(Value::Lit(lit))),
+            Expr::Var(name, span) => {
+                let optional = ctx.lookup(name);
+                return if optional.is_none(){
+                    Err(TyError::UnboundVariable {name: *name, span: *span})
+                } else {
+                    Ok(optional.unwrap())
+                }
+            },
+            Expr::Unary(un_op, expr, span) => {
+                let val = self.check_expr(expr, ctx, expected)?;
+                match *un_op{
+                    UnOp::Neg => match val.kind {
+                        TyKind::Int => Ok(val),
+                        _ => Err(TyError::Mismatch {expected: Ty{kind: TyKind::Int, span}, found: val, span})
+                    },
+                    _ => Err(TyError::Mismatch {expected: Ty{kind: TyKind::Int, span}, found: val, span})
+                }
+            },
+            Expr::Binary(bin_op, expr1, expr2, span) => {
                 todo_m5!("T-Arith / T-Ord / T-Eq / T-And / T-Or / T-Concat / T-Cons")
             }
-            Expr::Tuple(..) => todo_m5!("T-Tuple"),
-            Expr::List(..) => todo_m5!("T-List"),
-            Expr::Proj(..) => todo_m5!("T-Proj"),
-            Expr::Block(..) => todo_m5!("T-Block / T-Let / T-Seq"),
-            Expr::If(..) => todo_m5!("T-If"),
-            Expr::While(..) => todo_m5!("T-While"),
-            Expr::For(..) => todo_m5!("T-For"),
-            Expr::Assign(..) => todo_m5!("T-Assign"),
-            Expr::Return(..) => todo_m5!("T-Return (reads ctx.ret())"),
-            Expr::Lambda(..) => {
+            Expr::Tuple(vec_expr, span) => todo_m5!("T-Tuple"),
+            Expr::List(vec_expr, span) => todo_m5!("T-List"),
+            Expr::Proj(expr, u32, span) => todo_m5!("T-Proj"),
+            Expr::Block(vec_stmt, expr, span) => todo_m5!("T-Block / T-Let / T-Seq"),
+            Expr::If(expr1, expr2, expr3, span) => todo_m5!("T-If"),
+            Expr::While(expr1, expr2, span) => todo_m5!("T-While"),
+            Expr::For(name, expr1, expr2, span) => todo_m5!("T-For"),
+            Expr::Assign(expr1, expr2, span) => todo_m5!("T-Assign"),
+            Expr::Return(expr, span) => todo_m5!("T-Return (reads ctx.ret())"),
+            Expr::Lambda(vec_lambda_param, expr, span) => {
                 todo_m5!("T-Lam (parameter types from `expected`, the annotation, or a fresh meta)")
             }
-            Expr::Call(..) => todo_m5!("T-App (first-order matching of generics at the call)"),
+            Expr::Call	(expr, vec_expr, span) => todo_m5!("T-App (first-order matching of generics at the call)"),
 
             // ---- M6: relations ----
             Expr::Relation(..) => todo_m6!("T-Add / T-Clear / T-Solutions / T-Query"),
