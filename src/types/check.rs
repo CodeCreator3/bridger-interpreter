@@ -84,13 +84,17 @@ impl Checker {
             },
             Expr::Binary(bin_op, expr1, expr2, span) => match *bin_op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                    self.check_expr(expr1, ctx, Some(&Ty::int()))?;
-                    self.check_expr(expr2, ctx, Some(&Ty::int()))?;
+                    let val1 = self.check_expr(expr1, ctx, Some(&Ty::int()))?;
+                    let val2 = self.check_expr(expr2, ctx, Some(&Ty::int()))?;
+                    self.unify(&val1, &Ty::int(), *span)?;
+                    self.unify(&val2, &Ty::int(), *span)?;
                     Ok(Ty::int())
                 }
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                    self.check_expr(expr1, ctx, Some(&Ty::int()))?;
-                    self.check_expr(expr2, ctx, Some(&Ty::int()))?;
+                    let val1 = self.check_expr(expr1, ctx, Some(&Ty::int()))?;
+                    let val2 = self.check_expr(expr2, ctx, Some(&Ty::int()))?;
+                    self.unify(&val1, &Ty::int(), *span)?;
+                    self.unify(&val2, &Ty::int(), *span)?;
                     Ok(Ty::bool())
                 }
                 BinOp::Eq | BinOp::Ne => {
@@ -100,8 +104,10 @@ impl Checker {
                     Ok(Ty::bool())
                 }
                 BinOp::And | BinOp::Or => {
-                    self.check_expr(expr1, ctx, Some(&Ty::bool()))?;
-                    self.check_expr(expr2, ctx, Some(&Ty::bool()))?;
+                    let val1 = self.check_expr(expr1, ctx, Some(&Ty::bool()))?;
+                    let val2 = self.check_expr(expr2, ctx, Some(&Ty::bool()))?;
+                    self.unify(&val1, &Ty::bool(), *span)?;
+                    self.unify(&val2, &Ty::bool(), *span)?;
                     Ok(Ty::bool())
                 }
                 BinOp::Concat => {
@@ -111,21 +117,23 @@ impl Checker {
                     Ok(val1)
                 }
                 BinOp::Cons => {
-                    let val1 = self.check_expr(expr1, ctx, Option::None)?;
                     let val2 = self.check_expr(expr2, ctx, Option::None)?;
+                    match val2.clone().kind {
+                        TyKind::List(list) => {
+                            let val1 = self.check_expr(expr1, ctx, Some(&list.as_ref().clone()))?;
+                            self.unify(&val1, &list.as_ref().clone(), *span)?;
+                        }
+                        _ => ()
+                    }
                     Ok(val2)
                 }
             },
-            Expr::Tuple(vec_expr, span) => {
-                if (vec_expr.len() > 0) {
+            Expr::Tuple(vec_expr, _span) => {
+                if vec_expr.len() > 0 {
                     let vec_val: Vec<_> = (*vec_expr)
                         .iter()
-                        .map(|expr| self.check_expr(expr, ctx, expected))
+                        .map(|expr| self.check_expr(expr, ctx, None))
                         .collect::<Result<_, _>>()?;
-                    let prev_val = vec_val[0].clone();
-                    for val in vec_val.clone() {
-                        self.unify(&val, &prev_val, *span)?;
-                    }
                     Ok(Ty::tuple(vec_val))
                 } else {
                     Ok(Ty::tuple(vec![]))
@@ -134,7 +142,7 @@ impl Checker {
             Expr::List(vec_expr, span) => {
                 let vec_val: Vec<_> = (*vec_expr)
                     .iter()
-                    .map(|expr| self.check_expr(expr, ctx, expected))
+                    .map(|expr| self.check_expr(expr, ctx, None))
                     .collect::<Result<_, _>>()?;
                 let prev_val = vec_val[0].clone();
                 for val in vec_val.clone() {
@@ -163,7 +171,7 @@ impl Checker {
                 }
             }
             Expr::Block(vec_stmt, expr, span) => {
-                let cx = ctx.clone();
+                let mut cx = ctx.clone();
                 let mut leaves = false;
                 for stmt in vec_stmt.clone() {
                     // T-Let / T-Seq: check the statement, extending `cx` for a `let`.
@@ -171,7 +179,7 @@ impl Checker {
                     // `at` is the statement's span.
                     let (e, at) = match stmt {
                         Stmt::Let(name, val, expr, span) => {
-                            cx = cx.extend(name, val.unwrap());
+                            cx = cx.extend(name, val.unwrap_or(self.fresh_meta()));
                             (expr, span)
                         }
                         Stmt::Expr(expr) => (expr, *span),
@@ -210,8 +218,8 @@ impl Checker {
                 let t = match *expr3 {
                     Some(_) => {
                         let val2 = self.check_expr(expr2, ctx, expected)?;
-                        let val3 = self.check_expr(expr3.unwrap().as_ref(), ctx, expected)?;
-                        self.unify(&val2, &val3, *span);
+                        let val3 = self.check_expr(expr3.clone().unwrap().as_ref(), ctx, expected)?;
+                        self.unify(&val2, &val3, *span)?;
                         val2
                     }
                     None => self.check_expr(expr2, ctx, Option::None)?,
@@ -243,21 +251,27 @@ impl Checker {
                 self.record(*span, t.clone());
                 Ok(t)
             }
-            Expr::While(expr1, expr2, _) => {
-                self.check_expr(expr1, ctx, Some(&Ty::bool()))?;
-                self.check_expr(expr2, ctx, Some(&Ty::unit()))?;
+            Expr::While(expr1, expr2, span) => {
+                let val1 = self.check_expr(expr1, ctx, Some(&Ty::bool()))?;
+                self.unify(&val1, &Ty::bool(), *span)?;
+                let val2 = self.check_expr(expr2, ctx, Some(&Ty::unit()))?;
+                self.unify(&val2, &Ty::bool(), *span)?;
                 Ok(Ty::unit())
             }
-            Expr::For(_, expr1, expr2, _) => {
-                self.check_expr(expr1, ctx, Some(&Ty::list(Ty::self_ty())))?;
-                self.check_expr(expr2, ctx, Some(&Ty::unit()))?;
+            Expr::For(_, expr1, expr2, span) => {
+                let val1 = self.check_expr(expr1, ctx, Some(&Ty::list(Ty::self_ty())))?;
+                self.unify(&val1, &Ty::list(Ty::self_ty()), *span)?;
+                let val2 = self.check_expr(expr2, ctx, Some(&Ty::unit()))?;
+                self.unify(&val2, &Ty::unit(), *span)?;
                 Ok(Ty::unit())
             }
-            Expr::Assign(expr1, expr2, _) => {
+            Expr::Assign(expr1, expr2, span) => {
                 let inner = self.fresh_meta();
                 let expected = Ty::reference(inner);
                 let val1 = self.check_expr(expr1, ctx, Some(&expected))?;
-                self.check_expr(expr2, ctx, Some(&val1))?;
+                self.unify(&val1, &expected, *span)?;
+                let val2 = self.check_expr(expr2, ctx, Some(&val1))?;
+                self.unify(&val2, &val1, *span)?;
                 Ok(Ty::unit())
             }
             Expr::Return(expr, _) => {
@@ -310,16 +324,16 @@ impl Checker {
         let b = self.resolve(b);
         match a.kind {
             TyKind::Meta(id) => {
-                if (self.solution(id) == None) {
-                    self.solve(id, b)
+                if self.solution(id) == None {
+                    self.solve(id, b.clone())
                 }
             }
             _ => (),
         }
         match b.kind {
             TyKind::Meta(id) => {
-                if (self.solution(id) == None) {
-                    self.solve(id, a)
+                if self.solution(id) == None {
+                    self.solve(id, a.clone())
                 }
             }
             _ => (),
