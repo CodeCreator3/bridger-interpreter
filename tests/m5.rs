@@ -494,7 +494,8 @@ fn a_deeply_nested_literal_checks_in_linear_space() {
         "[".repeat(depth),
         "]".repeat(depth)
     );
-    assert!(check_program(&src).is_ok());
+    let result = check_program(&src);
+    assert!(result.is_ok(), "{result:#?}");
 }
 
 // ---- diagnostics: the mistake, not its symptom ----
@@ -526,7 +527,8 @@ fn an_omitted_result_type_and_a_missing_else_are_named() {
 fn a_block_that_ends_by_returning_is_diverging() {
     let src = "fn f(x: Int) -> Int = { if x > 0 { return 1; }; return 2; };\
         fn main() -> Int = f(0);";
-    assert!(check_program(src).is_ok());
+    let result = check_program(&src);
+    assert!(result.is_ok(), "{result:#?}");
 }
 
 #[test]

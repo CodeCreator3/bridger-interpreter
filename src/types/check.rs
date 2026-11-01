@@ -29,7 +29,10 @@
 //! choice is silently lost.
 
 use super::{Checker, Ctx, TyError};
-use crate::ast::{BinOp, Expr, Lit, Rule, Span, Stmt, Ty, TyKind, UnOp};
+use crate::{
+    ast::{BinOp, Decl::Fn, Expr, Lit, Rule, Span, Stmt, Ty, TyKind, UnOp},
+    types::MAX_NESTING,
+};
 
 impl Checker {
     /// The type of `e` in context `ctx`, checked against `expected` when one
@@ -40,7 +43,14 @@ impl Checker {
         ctx: &Ctx,
         expected: Option<&Ty>,
     ) -> Result<Ty, TyError> {
-        match e {
+        if self.depth >= MAX_NESTING {
+            return Err(TyError::TooDeep {
+                limit: MAX_NESTING,
+                span: e.span(),
+            });
+        }
+        self.depth += 1;
+        let result = (|| match e {
             // ---- M5: the checker over M1–M4's expressions ----
             Expr::Lit(lit, _span) => Ok(match *lit {
                 Lit::Int(_) => Ty::int(),
@@ -50,22 +60,49 @@ impl Checker {
             }),
             Expr::Var(name, span) => {
                 let optional = ctx.lookup(name);
+
                 return if optional.is_none() {
-                    Err(TyError::UnboundVariable {
-                        name: name.clone(),
-                        span: *span,
-                    })
+                    let native = self.native_fn_type(name, *span);
+                    if native == None {
+                        let global = self.global_type(name);
+                        if global.is_none() {
+                            let decl = self.decl(name);
+                            if decl.is_none() {
+                                Err(TyError::UnboundVariable {
+                                    name: name.clone(),
+                                    span: *span,
+                                })
+                            } else {
+                                match decl.unwrap() {
+                                    Fn(_gen, params, val, _expr) => {
+                                        // gen.params.iter().for_each(|f| f.name);
+                                        Ok(Ty::func(
+                                            (*params).iter().map(|p| p.ty.clone()).collect(),
+                                            val.clone(),
+                                        ))
+                                    }
+                                    _ => panic!(),
+                                }
+                            }
+                        } else {
+                            global.unwrap()
+                        }
+                    } else {
+                        Ok(native.unwrap())
+                    }
                 } else {
                     Ok(optional.unwrap())
                 };
             }
             Expr::Unary(un_op, expr, span) => match *un_op {
                 UnOp::Neg => {
-                    self.check_expr(expr, ctx, Some(&Ty::int()))?;
+                    let val1 = self.check_expr(expr, ctx, Some(&Ty::int()))?;
+                    self.unify(&val1, &Ty::int(), *span)?;
                     Ok(Ty::int())
                 }
                 UnOp::Not => {
-                    self.check_expr(expr, ctx, Some(&Ty::bool()))?;
+                    let val1 = self.check_expr(expr, ctx, Some(&Ty::bool()))?;
+                    self.unify(&val1, &Ty::bool(), *span)?;
                     Ok(Ty::bool())
                 }
                 UnOp::Ref => Ok(self.check_expr(expr, ctx, None)?),
@@ -123,7 +160,7 @@ impl Checker {
                             let val1 = self.check_expr(expr1, ctx, Some(&list.as_ref().clone()))?;
                             self.unify(&val1, &list.as_ref().clone(), *span)?;
                         }
-                        _ => ()
+                        _ => (),
                     }
                     Ok(val2)
                 }
@@ -179,10 +216,14 @@ impl Checker {
                     // `at` is the statement's span.
                     let (e, at) = match stmt {
                         Stmt::Let(name, val, expr, span) => {
-                            cx = cx.extend(name, val.unwrap_or(self.fresh_meta()));
+                            let inferred = self.check_expr(&expr, &cx, val.as_ref())?;
+                            cx = cx.extend(name, val.unwrap_or(inferred));
                             (expr, span)
                         }
-                        Stmt::Expr(expr) => (expr, *span),
+                        Stmt::Expr(expr) => {
+                            self.check_expr(&expr, &cx, None)?;
+                            (expr, *span)
+                        }
                     };
                     // The first statement that leaves makes the rest of the block dead;
                     // the call comes before the remaining statements are checked.
@@ -218,7 +259,8 @@ impl Checker {
                 let t = match *expr3 {
                     Some(_) => {
                         let val2 = self.check_expr(expr2, ctx, expected)?;
-                        let val3 = self.check_expr(expr3.clone().unwrap().as_ref(), ctx, expected)?;
+                        let val3 =
+                            self.check_expr(expr3.clone().unwrap().as_ref(), ctx, expected)?;
                         self.unify(&val2, &val3, *span)?;
                         val2
                     }
@@ -274,9 +316,10 @@ impl Checker {
                 self.unify(&val2, &val1, *span)?;
                 Ok(Ty::unit())
             }
-            Expr::Return(expr, _) => {
+            Expr::Return(expr, span) => {
                 let ret = ctx.ret().unwrap();
                 self.check_expr(expr, ctx, Some(&ret))?;
+                self.diverging.insert(*span);
                 Ok(ret)
             }
             Expr::Lambda(_, expr, _) => {
@@ -284,12 +327,17 @@ impl Checker {
                 Ok(Ty::unit())
             }
             Expr::Call(expr, vec_expr, span) => {
-                let val = self.check_expr(expr, ctx, None)?;
+                let (val, bounds) = self.check_callee(expr, ctx)?;
+
                 match val.kind {
                     TyKind::Fn(params, ret) => {
+                        let mut param_tys = vec![];
                         for (param, arg) in params.iter().zip(vec_expr) {
-                            self.check_expr(arg, ctx, Some(&param))?;
+                            let arg_val = self.check_expr(arg, ctx, Some(&param))?;
+                            self.unify(param, &arg_val, *span)?;
+                            param_tys.push(arg_val);
                         }
+                        self.finish_call(bounds, &param_tys, vec_expr, *span);
                         Ok(ret.as_ref().clone())
                     }
                     ty => Err(TyError::NotAFunction {
@@ -312,7 +360,9 @@ impl Checker {
             Expr::Struct(..) => todo_m8!("T-Struct"),
             Expr::Field(..) => todo_m8!("T-Field"),
             Expr::Method(..) => todo_m8!("T-Method (dispatch on the receiver's type; bounds)"),
-        }
+        })();
+        self.depth -= 1;
+        result
     }
 
     /// Make `a` and `b` the same type, or fail with a `Mismatch` at `span`.
@@ -322,31 +372,72 @@ impl Checker {
     pub fn unify(&mut self, a: &Ty, b: &Ty, span: Span) -> Result<(), TyError> {
         let a = self.resolve(a);
         let b = self.resolve(b);
-        match a.kind {
-            TyKind::Meta(id) => {
-                if self.solution(id) == None {
-                    self.solve(id, b.clone())
-                }
-            }
-            _ => (),
-        }
-        match b.kind {
-            TyKind::Meta(id) => {
-                if self.solution(id) == None {
-                    self.solve(id, a.clone())
-                }
-            }
-            _ => (),
-        }
 
-        if a != b {
-            Err(TyError::Mismatch {
-                expected: a.clone(),
-                found: b.clone(),
-                span,
-            })
-        } else {
-            Ok(())
+        match (a.clone().kind, b.clone().kind) {
+            (TyKind::Meta(id), _) => {
+                self.solve(id, b.clone());
+                Ok(())
+            }
+            (_, TyKind::Meta(id)) => {
+                self.solve(id, a.clone());
+                Ok(())
+            }
+            (TyKind::List(l1), TyKind::List(l2)) => self.unify(l1.as_ref(), l2.as_ref(), span),
+            (TyKind::Tuple(l1), TyKind::Tuple(l2)) => {
+                if l1.len() == l2.len() {
+                    for (ty_l1, ty_l2) in l1.iter().zip(l2.iter()) {
+                        self.unify(ty_l1, ty_l2, span)?;
+                    }
+                    Ok(())
+                } else {
+                    Err(TyError::Mismatch {
+                        expected: a,
+                        found: b,
+                        span,
+                    })
+                }
+            }
+            (TyKind::Ref(left), TyKind::Ref(right)) => self.unify(&left, &right, span),
+            (TyKind::Fn(params1, ret1), TyKind::Fn(params2, ret2)) => {
+                self.unify(&ret1, &ret2, span)?;
+                if params1.len() == params2.len() {
+                    for (param1, param2) in params1.iter().zip(params2.iter()) {
+                        self.unify(param1, param2, span)?;
+                    }
+                    Ok(())
+                } else {
+                    Err(TyError::Mismatch {
+                        expected: a,
+                        found: b,
+                        span,
+                    })
+                }
+            }
+            (TyKind::Named(name1, args1), TyKind::Named(name2, args2)) => {
+                if args1.len() == args2.len() && name1 == name2 {
+                    for (arg1, arg2) in args1.iter().zip(args2.iter()) {
+                        self.unify(arg1, arg2, span)?;
+                    }
+                    Ok(())
+                } else {
+                    Err(TyError::Mismatch {
+                        expected: a,
+                        found: b,
+                        span,
+                    })
+                }
+            }
+            _ => {
+                if a != b {
+                    Err(TyError::Mismatch {
+                        expected: a.clone(),
+                        found: b.clone(),
+                        span,
+                    })
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 
