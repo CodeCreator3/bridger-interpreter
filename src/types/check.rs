@@ -30,8 +30,7 @@
 
 use super::{Checker, Ctx, TyError};
 use crate::{
-    ast::{BinOp, Decl::Fn, Expr, Lit, Rule, Span, Stmt, Ty, TyKind, UnOp},
-    types::MAX_NESTING,
+    ast::{BinOp, Decl::Fn, Expr, Lit, Rule, Span, Stmt, Ty, TyKind, UnOp}, types::{MAX_NESTING},
 };
 
 impl Checker {
@@ -76,10 +75,12 @@ impl Checker {
                                 match decl.unwrap() {
                                     Fn(_gen, params, val, _expr) => {
                                         // gen.params.iter().for_each(|f| f.name);
-                                        Ok(Ty::func(
+                                        let ret = Ty::func(
                                             (*params).iter().map(|p| p.ty.clone()).collect(),
                                             val.clone(),
-                                        ))
+                                        );
+                                        self.record(*span, ret.clone());
+                                        Ok(ret)
                                     }
                                     _ => panic!(),
                                 }
@@ -88,9 +89,11 @@ impl Checker {
                             global.unwrap()
                         }
                     } else {
+                        self.record(*span, native.clone().unwrap());
                         Ok(native.unwrap())
                     }
                 } else {
+                    self.record(*span, optional.clone().unwrap());
                     Ok(optional.unwrap())
                 };
             }
@@ -98,19 +101,29 @@ impl Checker {
                 UnOp::Neg => {
                     let val1 = self.check_expr(expr, ctx, Some(&Ty::int()))?;
                     self.unify(&val1, &Ty::int(), *span)?;
+                    self.record(*span, Ty::int());
                     Ok(Ty::int())
                 }
                 UnOp::Not => {
                     let val1 = self.check_expr(expr, ctx, Some(&Ty::bool()))?;
                     self.unify(&val1, &Ty::bool(), *span)?;
+                    self.record(*span, Ty::bool());
                     Ok(Ty::bool())
                 }
-                UnOp::Ref => Ok(self.check_expr(expr, ctx, None)?),
+                UnOp::Ref => {
+                    let val = self.check_expr(expr, ctx, None)?;
+                    self.record(*span, val.clone());
+                    Ok(val)
+                },
 
                 UnOp::Deref => {
-                    let val = self.check_expr(expr, ctx, None)?;
+                    let mut val = self.check_expr(expr, ctx, None)?;
+                    val = self.resolve(&val);
                     match val.kind {
-                        TyKind::Ref(r) => Ok(r.as_ref().clone()),
+                        TyKind::Ref(r) => {
+                            self.record(*span, r.as_ref().clone());
+                            Ok(r.as_ref().clone())
+                        },
                         ty => Err(TyError::Mismatch {
                             expected: Ty::reference(self.fresh_meta()),
                             found: Ty::from(ty),
@@ -125,6 +138,7 @@ impl Checker {
                     let val2 = self.check_expr(expr2, ctx, Some(&Ty::int()))?;
                     self.unify(&val1, &Ty::int(), *span)?;
                     self.unify(&val2, &Ty::int(), *span)?;
+                    self.record(*span, Ty::int());
                     Ok(Ty::int())
                 }
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -132,12 +146,15 @@ impl Checker {
                     let val2 = self.check_expr(expr2, ctx, Some(&Ty::int()))?;
                     self.unify(&val1, &Ty::int(), *span)?;
                     self.unify(&val2, &Ty::int(), *span)?;
+                    self.record(*span, Ty::bool());
                     Ok(Ty::bool())
                 }
                 BinOp::Eq | BinOp::Ne => {
                     let val1 = self.check_expr(expr1, ctx, Option::None)?;
                     let val2 = self.check_expr(expr2, ctx, Option::None)?;
                     self.unify(&val1, &val2, *span)?;
+                    self.require_bound("Eq".to_string(), val1, *span);
+                    self.record(*span, Ty::bool());
                     Ok(Ty::bool())
                 }
                 BinOp::And | BinOp::Or => {
@@ -145,16 +162,19 @@ impl Checker {
                     let val2 = self.check_expr(expr2, ctx, Some(&Ty::bool()))?;
                     self.unify(&val1, &Ty::bool(), *span)?;
                     self.unify(&val2, &Ty::bool(), *span)?;
+                    self.record(*span, Ty::bool());
                     Ok(Ty::bool())
                 }
                 BinOp::Concat => {
                     let val1 = self.check_expr(expr1, ctx, Option::None)?;
                     let val2 = self.check_expr(expr2, ctx, Option::None)?;
                     self.unify(&val1, &val2, *span)?;
+                    self.record(*span, val1.clone());
                     Ok(val1)
                 }
                 BinOp::Cons => {
-                    let val2 = self.check_expr(expr2, ctx, Option::None)?;
+                    let mut val2 = self.check_expr(expr2, ctx, Option::None)?;
+                    val2 = self.resolve(&val2);
                     match val2.clone().kind {
                         TyKind::List(list) => {
                             let val1 = self.check_expr(expr1, ctx, Some(&list.as_ref().clone()))?;
@@ -162,17 +182,20 @@ impl Checker {
                         }
                         _ => (),
                     }
+                    self.record(*span, val2.clone());
                     Ok(val2)
                 }
             },
-            Expr::Tuple(vec_expr, _span) => {
+            Expr::Tuple(vec_expr, span) => {
                 if vec_expr.len() > 0 {
                     let vec_val: Vec<_> = (*vec_expr)
                         .iter()
                         .map(|expr| self.check_expr(expr, ctx, None))
                         .collect::<Result<_, _>>()?;
+                    self.record(*span, Ty::tuple(vec_val.clone()));
                     Ok(Ty::tuple(vec_val))
                 } else {
+                    self.record(*span, Ty::tuple(vec![]));
                     Ok(Ty::tuple(vec![]))
                 }
             }
@@ -181,23 +204,32 @@ impl Checker {
                     .iter()
                     .map(|expr| self.check_expr(expr, ctx, None))
                     .collect::<Result<_, _>>()?;
-                let prev_val = vec_val[0].clone();
-                for val in vec_val.clone() {
-                    self.unify(&val, &prev_val, *span)?;
+                if vec_val.len() > 0 {
+                    let prev_val = vec_val[0].clone();
+                    for val in vec_val.clone() {
+                        self.unify(&val, &prev_val, *span)?;
+                    }
+                    self.record(*span, vec_val[0].clone());
+                    Ok(Ty::list(vec_val[0].clone()))
+                } else {
+                    let ty: Ty = Ty::list(self.fresh_meta());
+                    self.record(*span, ty.clone());
+                    Ok(ty)
                 }
-                Ok(Ty::list(vec_val[0].clone()))
             }
             Expr::Proj(expr, index, span) => {
-                let val = self.check_expr(expr, ctx, Option::None)?;
+                let mut val = self.check_expr(expr, ctx, Option::None)?;
+                val = self.resolve(&val);
                 match val.kind {
                     TyKind::Tuple(val_vec) => {
-                        if val_vec.len() != *index as usize {
+                        if val_vec.len() <= *index as usize {
                             return Err(TyError::NoSuchComponent {
                                 index: *index,
                                 arity: val_vec.len(),
                                 span: *span,
                             });
                         }
+                        self.record(*span, val_vec[*index as usize].clone());
                         Ok(val_vec[*index as usize].clone())
                     }
                     ty => Err(TyError::NotATuple {
@@ -217,6 +249,9 @@ impl Checker {
                     let (e, at) = match stmt {
                         Stmt::Let(name, val, expr, span) => {
                             let inferred = self.check_expr(&expr, &cx, val.as_ref())?;
+                            if val.as_ref().is_some() {
+                                self.unify(&inferred, val.as_ref().unwrap(), span)?;
+                            }
                             cx = cx.extend(name, val.unwrap_or(inferred));
                             (expr, span)
                         }
@@ -298,6 +333,7 @@ impl Checker {
                 self.unify(&val1, &Ty::bool(), *span)?;
                 let val2 = self.check_expr(expr2, ctx, Some(&Ty::unit()))?;
                 self.unify(&val2, &Ty::bool(), *span)?;
+                self.record(*span, Ty::unit());
                 Ok(Ty::unit())
             }
             Expr::For(_, expr1, expr2, span) => {
@@ -305,6 +341,7 @@ impl Checker {
                 self.unify(&val1, &Ty::list(Ty::self_ty()), *span)?;
                 let val2 = self.check_expr(expr2, ctx, Some(&Ty::unit()))?;
                 self.unify(&val2, &Ty::unit(), *span)?;
+                self.record(*span, Ty::unit());
                 Ok(Ty::unit())
             }
             Expr::Assign(expr1, expr2, span) => {
@@ -314,22 +351,37 @@ impl Checker {
                 self.unify(&val1, &expected, *span)?;
                 let val2 = self.check_expr(expr2, ctx, Some(&val1))?;
                 self.unify(&val2, &val1, *span)?;
+                self.record(*span, Ty::unit());
                 Ok(Ty::unit())
             }
             Expr::Return(expr, span) => {
+                if ctx.ret().is_none() {
+                    return Err(TyError::ReturnOutsideFunction { span: *span })
+                }
                 let ret = ctx.ret().unwrap();
-                self.check_expr(expr, ctx, Some(&ret))?;
+                let val = self.check_expr(expr, ctx, Some(&ret))?;
+                self.unify(&val, &ret, *span)?;
                 self.diverging.insert(*span);
+                self.record(*span, ret.clone());
                 Ok(ret)
             }
-            Expr::Lambda(_, expr, _) => {
-                self.check_expr(expr, ctx, expected)?;
-                Ok(Ty::unit())
+            Expr::Lambda(params, expr, span) => {
+                let mut cx = ctx.clone();
+                let mut param_tys = vec![];
+                for param in params {
+                    let param_type = param.clone().ty.unwrap_or_else(|| self.fresh_meta());
+                    cx = cx.extend(param.clone().name, param_type.clone());
+                    param_tys.push(param_type);
+                }
+                let val = self.check_expr(expr, &cx, expected)?;
+                let lam_type = Ty::func(param_tys, val);
+                self.record(*span, lam_type.clone());
+                Ok(lam_type)
             }
             Expr::Call(expr, vec_expr, span) => {
                 let (val, bounds) = self.check_callee(expr, ctx)?;
 
-                match val.kind {
+                match val.clone().kind {
                     TyKind::Fn(params, ret) => {
                         let mut param_tys = vec![];
                         for (param, arg) in params.iter().zip(vec_expr) {
@@ -337,8 +389,29 @@ impl Checker {
                             self.unify(param, &arg_val, *span)?;
                             param_tys.push(arg_val);
                         }
+                        self.unify(&val.clone(), &ret.clone(), *span)?;
                         self.finish_call(bounds, &param_tys, vec_expr, *span);
+                        self.record(*span, ret.as_ref().clone());
                         Ok(ret.as_ref().clone())
+                    }
+                    TyKind::Meta(_id) => {
+                        let mut params = vec![];
+                        for _expr in vec_expr {
+                            params.push(self.fresh_meta());
+                        }
+                        let ret: Ty = self.fresh_meta();
+                        self.unify(&val.clone(), &ret.clone(), *span)?;
+                        let candadite = Ty::func(params.clone(), ret.clone());
+                        self.unify(&val, &candadite, *span)?;
+                        let mut param_tys = vec![];
+                        for (param, arg) in params.clone().iter().zip(vec_expr) {
+                            let arg_val = self.check_expr(arg, ctx, Some(&param))?;
+                            self.unify(param, &arg_val, *span)?;
+                            param_tys.push(arg_val);
+                        }
+                        self.finish_call(bounds, &param_tys, vec_expr, *span);
+                        self.record(*span, ret.clone());
+                        Ok(ret)
                     }
                     ty => Err(TyError::NotAFunction {
                         found: Ty::from(ty),
@@ -374,11 +447,23 @@ impl Checker {
         let b = self.resolve(b);
 
         match (a.clone().kind, b.clone().kind) {
+            (TyKind::Meta(id1), TyKind::Meta(id2)) => {
+                if id1 != id2 {
+                    self.solve(id1, b.clone());
+                }
+                Ok(())
+            }
             (TyKind::Meta(id), _) => {
+                if self.meta_in_meta(id, &b.clone()){
+                    return Err(TyError::InfiniteType { span });
+                }
                 self.solve(id, b.clone());
                 Ok(())
             }
             (_, TyKind::Meta(id)) => {
+                if self.meta_in_meta(id, &a.clone()){
+                    return Err(TyError::InfiniteType { span });
+                }
                 self.solve(id, a.clone());
                 Ok(())
             }
@@ -629,6 +714,10 @@ mod helpers {
             } else {
                 Err(TyError::Ambiguous { span })
             }
+        }
+
+        pub fn meta_in_meta(&mut self, id: u32, ty: &Ty) -> bool{
+            contains_ty(ty, &Ty::meta(id))
         }
     }
 

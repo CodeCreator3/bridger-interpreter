@@ -6,6 +6,8 @@
 //! for the runtime errors — tests match a `TyError`'s variant, not its message.
 //!
 //! Gated on the `m5` feature: compiled at every milestone from M5 on.
+//! 
+//! clear; cargo test --features m5 -- --skip a_deeply_nested_literal_checks_in_linear_space
 
 #![cfg(feature = "m5")]
 
@@ -166,10 +168,11 @@ fn return_matches_the_enclosing_return_type() {
     // inside a fn returning Int, `return 1` is fine and slots in anywhere
     assert!(infer_in_fn(&return_(int(1, 1), 0), Ty::int()).is_ok());
     // its operand must match the return type
+    let result = infer_in_fn(&return_(boolean(true, 1), 0), Ty::int());
     assert!(matches!(
-        infer_in_fn(&return_(boolean(true, 1), 0), Ty::int()),
+        result,
         Err(TyError::Mismatch { .. })
-    ));
+    ), "{result:#?}");
     // at the top level there is no return type
     assert!(matches!(
         infer(&return_(int(1, 1), 0)),
@@ -337,7 +340,8 @@ fn the_expected_type_reaches_tuples_and_lists() {
         let src = format!("fn main() -> Int {{ let f: fn(Int) -> Int = {body}; f(1) }}");
         // `[..][0]` is not Bridger syntax; use `head` for the list case
         let src = src.replace("[|p| p + 1][0]", "unwrap_or(head([|p| p + 1]), |p| p)");
-        assert!(check(&src).is_ok(), "{body}");
+        let result = check(&src);
+        assert!(result.is_ok(), "{body}, {result:#?}");
     }
 }
 
@@ -363,12 +367,13 @@ fn printing_and_equality_need_data_all_the_way_down() {
         Err(TyError::NoEquality { .. })
     ));
     // `==` at a type the context fixes later is still caught
-    assert!(matches!(
-        check(
+    let result = check(
             "fn main() -> Bool { let xs = []; let b = xs == xs; let ys: [fn(Int) -> Int] = xs; b }"
-        ),
+        );
+    assert!(matches!(result
+        ,
         Err(TyError::NoEquality { .. })
-    ));
+    ), "{result:#?}");
     // a bare type parameter admits neither without a bound
     assert!(matches!(
         check("fn same<T>(a: T, b: T) -> Bool = a == b; fn main() -> () = ();"),
@@ -411,10 +416,7 @@ fn every_type_is_determined_within_its_declaration() {
         "fn main() -> Int { let f = |y| y; 1 }",
         "fn main() -> () = println([]);",
     ] {
-        assert!(
-            matches!(check_program(src), Err(TyError::Ambiguous { .. })),
-            "{src}"
-        );
+        assert!(matches!(check_program(src), Err(TyError::Ambiguous { .. })), "{src}");
     }
     // pinned by an annotation, or by a use within the same declaration
     for src in [
@@ -422,7 +424,8 @@ fn every_type_is_determined_within_its_declaration() {
         "fn main() -> Int { let x = []; len(x ++ [1]) }",
         "fn main() -> () { let xs: [Int] = []; println(xs) }",
     ] {
-        assert!(check_program(src).is_ok(), "{src}");
+        let result = check_program(src);
+        assert!(result.is_ok(), "{src}, {result:#?}");
     }
     // and a bound is judged on the determined type
     assert!(matches!(
