@@ -6,7 +6,7 @@
 //! for the runtime errors — tests match a `TyError`'s variant, not its message.
 //!
 //! Gated on the `m5` feature: compiled at every milestone from M5 on.
-//! 
+//!
 //! clear; cargo test --features m5 -- --skip a_deeply_nested_literal_checks_in_linear_space
 
 #![cfg(feature = "m5")]
@@ -169,10 +169,10 @@ fn return_matches_the_enclosing_return_type() {
     assert!(infer_in_fn(&return_(int(1, 1), 0), Ty::int()).is_ok());
     // its operand must match the return type
     let result = infer_in_fn(&return_(boolean(true, 1), 0), Ty::int());
-    assert!(matches!(
-        result,
-        Err(TyError::Mismatch { .. })
-    ), "{result:#?}");
+    assert!(
+        matches!(result, Err(TyError::Mismatch { .. })),
+        "{result:#?}"
+    );
     // at the top level there is no return type
     assert!(matches!(
         infer(&return_(int(1, 1), 0)),
@@ -204,10 +204,11 @@ fn application_checks_arguments_and_yields_the_result() {
     assert_eq!(infer(&call(f, vec![int(4, 4)], 5)).unwrap(), Ty::int());
     // wrong arity
     let g = lambda(&["x", "y"], int(0, 1), 0);
-    assert!(matches!(
-        infer(&call(g, vec![int(1, 2)], 3)),
-        Err(TyError::ArityMismatch { .. })
-    ));
+    let result = infer(&call(g, vec![int(1, 2)], 3));
+    assert!(
+        matches!(result, Err(TyError::ArityMismatch { .. })),
+        "{result:#?}"
+    );
     // calling a non-function
     assert!(matches!(
         infer(&call(int(5, 1), vec![], 0)),
@@ -285,7 +286,10 @@ fn a_cycle_among_globals_is_a_static_error() {
 #[test]
 fn an_annotation_must_name_a_declared_type() {
     let unknown = check_program("fn main() -> Int { let x: Foo = 1; x }");
-    assert!(matches!(unknown, Err(TyError::UnknownType { .. })));
+    assert!(
+        matches!(unknown, Err(TyError::UnknownType { .. })),
+        "{unknown:#?}"
+    );
     let in_sig = check_program("fn f(x: Nope) -> Int = 1; fn main() -> Int = 1;");
     assert!(matches!(in_sig, Err(TyError::UnknownType { .. })));
 }
@@ -368,12 +372,12 @@ fn printing_and_equality_need_data_all_the_way_down() {
     ));
     // `==` at a type the context fixes later is still caught
     let result = check(
-            "fn main() -> Bool { let xs = []; let b = xs == xs; let ys: [fn(Int) -> Int] = xs; b }"
-        );
-    assert!(matches!(result
-        ,
-        Err(TyError::NoEquality { .. })
-    ), "{result:#?}");
+        "fn main() -> Bool { let xs = []; let b = xs == xs; let ys: [fn(Int) -> Int] = xs; b }",
+    );
+    assert!(
+        matches!(result, Err(TyError::NoEquality { .. })),
+        "{result:#?}"
+    );
     // a bare type parameter admits neither without a bound
     assert!(matches!(
         check("fn same<T>(a: T, b: T) -> Bool = a == b; fn main() -> () = ();"),
@@ -416,7 +420,10 @@ fn every_type_is_determined_within_its_declaration() {
         "fn main() -> Int { let f = |y| y; 1 }",
         "fn main() -> () = println([]);",
     ] {
-        assert!(matches!(check_program(src), Err(TyError::Ambiguous { .. })), "{src}");
+        assert!(
+            matches!(check_program(src), Err(TyError::Ambiguous { .. })),
+            "{src}"
+        );
     }
     // pinned by an annotation, or by a use within the same declaration
     for src in [
@@ -458,10 +465,11 @@ fn no_type_crosses_a_declaration_except_through_an_annotation() {
     let typed = "let g: ref<[fn(Int) -> Int]> = ref [];\
         fn f() -> () = println(deref g);\
         fn main() -> () = f();";
-    assert!(matches!(
-        check_program(typed),
-        Err(TyError::NotPrintable { .. })
-    ));
+    let result = check_program(typed);
+    assert!(
+        matches!(result, Err(TyError::NotPrintable { .. })),
+        "{result:#?}"
+    );
 }
 
 #[test]
@@ -606,10 +614,14 @@ fn an_else_less_if_whose_branch_leaves_is_unit() {
     // the branch has no value, so the `if` is `()`; that is the mismatch,
     // not a branch "of type Int"
     let src = "fn f(c: Bool) -> Int { if c { return 1; } } fn main() -> Int = f(true);";
-    assert!(matches!(
-        check_program(src),
-        Err(TyError::Mismatch { expected, found, .. }) if expected == Ty::int() && found == Ty::unit()
-    ));
+    let result = check_program(src);
+    assert!(
+        matches!(
+            result,
+            Err(TyError::Mismatch { ref expected, ref found, .. }) if *expected == Ty::int() && *found == Ty::unit()
+        ),
+        "{result:#?}"
+    );
 }
 
 #[test]
@@ -622,7 +634,8 @@ fn dead_code_after_a_leaving_block_needs_no_annotation() {
         "fn f() -> Int { for x in { return 1; } { println(x) }; 2 } fn main() -> Int = f();",
         "fn f() -> Int { if { return 1; } { println([]) } else { () }; 2 } fn main() -> Int = f();",
     ] {
-        assert!(check_program(src).is_ok(), "{src}");
+        let result = check_program(src);
+        assert!(result.is_ok(), "{src}, {result:#?}");
     }
     // but a live value a leaving form's type reached is judged as usual: the
     // lambda is a value, and its parameter is undetermined
@@ -632,9 +645,10 @@ fn dead_code_after_a_leaving_block_needs_no_annotation() {
         "let g = |x| { return x; }; fn main() -> () { println(g(1)); println(g(\"a\")) }",
         "fn main() -> () { let f = |x| { return x; }; println(min(f, f)) }",
     ] {
+        let result = check_program(src);
         assert!(
-            matches!(check_program(src), Err(TyError::Ambiguous { .. })),
-            "{src}"
+            matches!(result, Err(TyError::Ambiguous { .. })),
+            "{src}, {result:#?}"
         );
     }
     // `return e;` as the whole body of a function with no `-> T`
@@ -677,7 +691,7 @@ fn an_undetermined_argument_is_blamed_not_the_callee() {
         ("fn f<T>(x: T) -> () = (); fn main() -> () = f([]);", "[]"),
     ] {
         let err = check_program(src).unwrap_err();
-        assert!(matches!(err, TyError::Ambiguous { .. }), "{src}");
+        assert!(matches!(err, TyError::Ambiguous { .. }), "{src}, {err}");
         assert_eq!(&src[err.span().start..err.span().end], arg, "{src}");
     }
 }
@@ -750,7 +764,11 @@ fn a_concatenation_of_two_leaving_operands_is_undetermined() {
     let src =
         "fn f() -> String = if (return \"a\") ++ (return \"b\") != \"c\" { \"d\" } else { \"e\" };\
         fn main() -> () { let s = f(); }";
-    assert!(matches!(check_program(src), Err(TyError::Ambiguous { .. })));
+    let result = check_program(src);
+    assert!(
+        matches!(result, Err(TyError::Ambiguous { .. })),
+        "{result:#?}"
+    );
 }
 
 #[test]
