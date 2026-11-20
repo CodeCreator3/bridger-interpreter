@@ -29,13 +29,7 @@
 
 use super::Interpreter;
 use super::{Control, Env, Value};
-use crate::ast::BinOp;
-use crate::ast::Expr;
-use crate::ast::LambdaParam;
-use crate::ast::Lit;
-use crate::ast::Span;
-use crate::ast::Stmt;
-use crate::ast::UnOp;
+use crate::ast::{BinOp, Decl, Expr, LambdaParam, Lit, QArg, Query, Rel, Span, Stmt, UnOp};
 use crate::interp::value::{uncomparable, List};
 use crate::interp::Closure;
 use crate::interp::Name;
@@ -72,8 +66,8 @@ impl Interpreter {
             Expr::Call(operator, args, span) => self.call(operator, args, span, env),
 
             // ---- M6: relations (queries go through `self.solutions`, engine.rs) ----
-            Expr::Relation(..) => todo_m6!("E-Add / E-Clear / E-Solutions / E-Query"),
-            Expr::ForQuery(..) => todo_m6!("E-ForQuery (iterate a query's solutions)"),
+            Expr::Relation(rel, span) => self.relation(rel, span, env),
+            Expr::ForQuery(query, expr, span) => self.for_query(query, expr, span, env),
 
             // ---- M7: algebraic data types ----
             Expr::Ctor(..) => todo_m7!("E-Ctor"),
@@ -677,6 +671,15 @@ impl Interpreter {
                     }
                 }
             }
+            Value::Relation(name) => {
+                result = {
+                    let query = Query {
+                        name: name.clone(),
+                        args: args.iter().cloned().map(QArg::Expr).collect(),
+                    };
+                    Ok(Value::Bool(!self.solutions(&query, *span, env)?.is_empty()))
+                }
+            }
             found => {
                 result = Err(Control::Raise(RuntimeError::NotAFunction {
                     found: type_of(&found),
@@ -693,5 +696,172 @@ impl Interpreter {
         };
         self.leave_call();
         result
+    }
+
+    fn relation(&mut self, rel: &Rel, span: &Span, env: &Env) -> Result<Value, Control> {
+        match rel.clone() {
+            Rel::Add(query) => {
+                if self.materializing {
+                    return Err(Control::Raise(RuntimeError::QueryInFilter { span: *span }));
+                };
+                let optional_relation = env.lookup(query.name.as_str());
+
+                match optional_relation {
+                    Some(relation) => match relation {
+                        Value::Relation(name) => {
+                            let mut vals = vec![];
+                            for arg in query.args {
+                                match arg {
+                                    QArg::Expr(expr) => vals.push(self.eval_expr(&expr, env)?),
+                                    QArg::Hole(_) => {
+                                        return Err(Control::Raise(RuntimeError::HoleInAdd {
+                                            span: *span,
+                                        }))
+                                    }
+                                };
+                            }
+
+                            match self.program().decls.get(query.name.as_str()) {
+                                Some(Decl::Relation(types)) => {
+                                    if types.len() != vals.len() {
+                                        return Err(Control::Raise(RuntimeError::ArityMismatch {
+                                            expected: types.len(),
+                                            found: vals.len(),
+                                            span: *span,
+                                        }));
+                                    }
+                                }
+                                _ => {
+                                    return Err(Control::Raise(RuntimeError::NotARelation {
+                                        name: query.name,
+                                        span: *span,
+                                    }))
+                                }
+                            }
+                            self.db.add(name.as_str(), vals);
+                            Ok(Value::Unit)
+                        }
+                        _ => Err(Control::Raise(RuntimeError::NotARelation {
+                            name: query.name,
+                            span: *span,
+                        })),
+                    },
+                    None => Err(Control::Raise(RuntimeError::NoSuchField {
+                        field: query.name,
+                        span: *span,
+                    })),
+                }
+            }
+            Rel::Clear(name) => {
+                if self.materializing {
+                    return Err(Control::Raise(RuntimeError::QueryInFilter { span: *span }));
+                };
+                let optional_relation = env.lookup(name.as_str());
+                match optional_relation {
+                    Some(relation) => match relation {
+                        Value::Relation(name) => {
+                            self.db.clear(name.as_str());
+                            Ok(Value::Unit)
+                        }
+                        _ => Err(Control::Raise(RuntimeError::NotARelation {
+                            name,
+                            span: *span,
+                        })),
+                    },
+                    None => Err(Control::Raise(RuntimeError::NoSuchField {
+                        field: name,
+                        span: *span,
+                    })),
+                }
+            }
+            Rel::Solutions(query) => {
+                let optional_relation = env.lookup(query.name.as_str());
+
+                match optional_relation {
+                    Some(relation) => match relation {
+                        Value::Relation(_) => {
+                            let mut output = vec![];
+                            let sols = self.solutions(&query, *span, env)?;
+                            for sol in sols {
+                                // One value per distinct named hole, first
+                                // appearance first: `r(?x, ?x)` is one hole.
+                                let mut vals = vec![];
+                                let mut seen: Vec<Name> = vec![];
+                                for arg in &query.args {
+                                    if let QArg::Hole(Some(name)) = arg {
+                                        if !seen.iter().any(|n| n == name) {
+                                            seen.push(name.clone());
+                                            if let Some(val) = sol.get(name) {
+                                                vals.push(val.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                let part = if vals.is_empty() {
+                                    Value::Unit
+                                } else if vals.len() == 1 {
+                                    vals[0].clone()
+                                } else {
+                                    Value::Tuple(Rc::from(vals))
+                                };
+                                output.push(part)
+                            }
+                            Ok(Value::List(output.into()))
+                        }
+                        _ => Err(Control::Raise(RuntimeError::NotARelation {
+                            name: query.name,
+                            span: *span,
+                        })),
+                    },
+                    None => Err(Control::Raise(RuntimeError::NoSuchField {
+                        field: query.name,
+                        span: *span,
+                    })),
+                }
+            }
+            Rel::Query(query) => {
+                let optional_relation = env.lookup(query.name.as_str());
+
+                match optional_relation {
+                    Some(relation) => match relation {
+                        Value::Relation(_) => {
+                            let sols = self.solutions(&query, *span, env)?;
+                            if !sols.is_empty() {
+                                Ok(Value::Bool(true))
+                            } else {
+                                Ok(Value::Bool(false))
+                            }
+                        }
+                        _ => Err(Control::Raise(RuntimeError::NotARelation {
+                            name: query.name,
+                            span: *span,
+                        })),
+                    },
+                    None => Err(Control::Raise(RuntimeError::NoSuchField {
+                        field: query.name,
+                        span: *span,
+                    })),
+                }
+            }
+        }
+    }
+
+    fn for_query(
+        &mut self,
+        query: &Query,
+        expr: &Expr,
+        span: &Span,
+        env: &Env,
+    ) -> Result<Value, Control> {
+        let sols = self.solutions(query, *span, env)?;
+
+        for sol in sols {
+            let mut new_env = env.clone();
+            sol.iter()
+                .for_each(|(n, v)| new_env = new_env.extend(n.clone(), v.clone()));
+            self.eval_expr(expr, &new_env)?;
+        }
+
+        Ok(Value::Unit)
     }
 }

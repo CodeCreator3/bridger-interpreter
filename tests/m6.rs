@@ -161,7 +161,11 @@ fn the_head_must_name_a_declared_relation() {
 #[test]
 fn a_generators_arity_must_match() {
     let src = "relation edge : (Int, Int); relation p : (Int); rule p(x) :- edge(x);";
-    assert!(matches!(check_rules_src(src), Err(RuleError::Arity { .. })));
+    let result = check_rules_src(src);
+    assert!(
+        matches!(result, Err(RuleError::Arity { .. })),
+        "{result:#?}"
+    );
 }
 
 #[test]
@@ -223,10 +227,11 @@ fn a_filter_reaching_a_higher_order_function_is_rejected() {
         fn apply1(f: fn(Int) -> Bool, x: Int) -> Bool = f(x);\
         fn pos(x: Int) -> Bool = apply1(|y| y > 0, x);\
         rule s(x) :- r(x) and pos(x);";
-    assert!(matches!(
-        check_rules_src(src),
-        Err(RuleError::HigherOrder { .. })
-    ));
+    let result = check_rules_src(src);
+    assert!(
+        matches!(result, Err(RuleError::HigherOrder { .. })),
+        "{result:#?}"
+    );
 }
 
 #[test]
@@ -236,7 +241,8 @@ fn a_filter_may_read_a_global_constant() {
         let limit = 2;\
         rule big(x) :- r(x) and x > limit;\
         fn main() -> [Int] { add r(1); add r(2); add r(3); add r(4); solutions big(?x) }";
-    assert!(check_rules_src(src).is_ok());
+    let result = check_rules_src(src);
+    assert!(result.is_ok(), "{result:#?}");
     let mut got = ints(&run_program(src).0);
     got.sort();
     assert_eq!(got, vec![3, 4]);
@@ -277,7 +283,8 @@ fn a_holed_query_in_boolean_position_tests_existence() {
     );
     let mut it = Interpreter::new();
     it.load_program(&src).expect("parse");
-    assert!(Checker::check_program(it.program()).is_ok());
+    let result = Checker::check_program(it.program());
+    assert!(result.is_ok(), "{result:#?}");
 }
 
 #[test]
@@ -534,18 +541,26 @@ fn a_call_through_a_global_is_impure() {
     let src = "relation e : (Int); relation r : (Int);\
         let f = |x: Int| x > 1;\
         rule r(x) :- e(x) and f(x);";
-    assert!(matches!(
-        check_rules_src(src),
-        Err(RuleError::Impure { ref witness, .. }) if witness == &["f".to_string()]
-    ));
+    let result = check_rules_src(src);
+    assert!(
+        matches!(
+            result,
+            Err(RuleError::Impure { ref witness, .. }) if witness == &["f".to_string()]
+        ),
+        "{result:#?}"
+    );
     // an impure function passed as a value is as good as called
     let passed = "relation e : (Int); relation r : (Int);\
         fn noisy(a: Bool, x: Int) -> Bool { print(x); a }\
         rule r(x) :- e(x) and fold([x], true, noisy);";
-    assert!(matches!(
-        check_rules_src(passed),
-        Err(RuleError::Impure { ref witness, .. }) if witness.contains(&"noisy".to_string())
-    ));
+    let result = check_rules_src(passed);
+    assert!(
+        matches!(
+            result,
+            Err(RuleError::Impure { ref witness, .. }) if witness.contains(&"noisy".to_string())
+        ),
+        "{result:#?}"
+    );
     // the prelude's recursion is structural: `fold` with a pure lambda is fine
     let ok = "relation e : (Int); relation r : (Int);\
         rule r(x) :- e(x) and fold([x, x], true, |a: Bool, y: Int| a and y > 0);\
@@ -615,10 +630,14 @@ fn a_call_through_a_local_or_a_callback_it_cannot_follow_is_impure() {
     let alias = "relation s : (Int); relation r : (Int);\
         let noisy = |x: Int| { println(\"e\"); x > 0 };\
         rule r(x) :- s(x) and { let g = noisy; g(x) };";
-    assert!(matches!(
-        check_rules_src(alias),
-        Err(RuleError::Impure { ref witness, .. }) if witness == &["g".to_string()]
-    ));
+    let result = check_rules_src(alias);
+    assert!(
+        matches!(
+            result,
+            Err(RuleError::Impure { ref witness, .. }) if witness == &["g".to_string()]
+        ),
+        "{result:#?}"
+    );
     // the function handed to `fold` must be a named function, a pure native,
     // or a lambda — a global closure is none of these
     let handed = "relation s : (Int); relation r : (Int);\
@@ -672,9 +691,10 @@ fn a_query_form_on_a_name_that_is_not_a_relation_says_so() {
         "fn main() -> [()] = solutions abs(1);",
         "let k = 1; fn main() -> () = clear k;",
     ] {
+        let result = check_program(src);
         assert!(
-            matches!(check_program(src), Err(TyError::NotARelation { .. })),
-            "{src}"
+            matches!(result, Err(TyError::NotARelation { .. })),
+            "{src}\n{result:#?}"
         );
     }
     assert!(matches!(
@@ -842,6 +862,7 @@ fn a_rule_is_judged_in_place_and_blames_the_offending_term() {
     let src = "relation r : (Int); relation s : (Int); rule s(x) :- r(\"a\") and x == 1;\
         fn main() -> Int = 1;";
     let err = check_program(src).unwrap_err();
+    println!("{err:#?}");
     assert_eq!(&src[err.span().start..err.span().end], "\"a\"");
 }
 
@@ -984,10 +1005,14 @@ fn a_local_named_like_a_function_is_a_local_to_the_purity_judgment() {
     let src = "relation i : (Int); relation a : (Int);\
         fn sq(x: Int) -> Int = x * x; let g = |x: Int| { println(\"boom\"); x };\
         rule a(x) :- i(x) and { let sq = g; sq(x) > 0 };";
-    assert!(matches!(
-        check_rules_src(src),
-        Err(RuleError::Impure { ref witness, .. }) if witness == &["sq".to_string()]
-    ));
+    let result = check_rules_src(src);
+    assert!(
+        matches!(
+            result,
+            Err(RuleError::Impure { ref witness, .. }) if witness == &["sq".to_string()]
+        ),
+        "{result:#?}"
+    );
     // and a variable named like an impure function is just a variable
     let src = "relation i : (Int); relation a : (Int);\
         fn noisy() -> Int { println(\"x\"); 1 }\
@@ -1002,11 +1027,15 @@ fn a_filter_may_not_observe_a_reference_through_to_string() {
     let src = "relation c : (ref<Int>); relation five : (ref<Int>);\
         fn show<T: Print>(x: T) -> String = to_string(x);\
         rule five(r) :- c(r) and show(r) == \"ref(5)\";";
-    assert!(matches!(
-        check_rules_src(src),
-        Err(RuleError::Impure { ref witness, .. })
-            if witness == &["show".to_string(), "to_string".to_string()]
-    ));
+    let result = check_rules_src(src);
+    assert!(
+        matches!(
+            result,
+            Err(RuleError::Impure { ref witness, .. })
+                if witness == &["show".to_string(), "to_string".to_string()]
+        ),
+        "{result:#?}"
+    );
 }
 
 // ---- fifteenth review round: rule-check contracts the suite left open ----
@@ -1026,10 +1055,11 @@ fn a_filter_whose_callback_is_a_local_cannot_be_followed_and_is_impure() {
     let src = "relation s : (Int); relation r : (Int);\
         rule r(x) :- s(x) and { let cb = |y: Int| { println(\"e\"); y > 0 };\
         filter([x], cb) != [] };";
-    assert!(matches!(
-        check_rules_src(src),
-        Err(RuleError::Impure { .. })
-    ));
+    let result = check_rules_src(src);
+    assert!(
+        matches!(result, Err(RuleError::Impure { .. })),
+        "{result:#?}"
+    );
 }
 
 #[test]

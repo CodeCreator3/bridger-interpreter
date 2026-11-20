@@ -1,6 +1,7 @@
 {
     "rust-analyzer.cargo.features": [
-        "m5"
+        "m5",
+        "m6"
     ],
     "chat.tools.terminal.autoApprove": {
         "cargo test": true
